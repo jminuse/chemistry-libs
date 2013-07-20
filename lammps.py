@@ -1,4 +1,4 @@
-import re, random
+import re, random, numpy, math
 import utils
 
 def parse_opls_parameters(parameter_file):
@@ -44,55 +44,41 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 	#index2s = dict([ for a in atoms])
 	#print dihedral_types_by_index2.keys()
 	
-	def missing_dihedrals():
+	def missing_dihedrals(close_ok):
 		missing_count = 0
 		for d in dihedrals:
-			#print tuple([a.type.index2 for a in d.atoms])
 			if tuple([a.type.index2 for a in d.atoms]) not in dihedral_types_by_index2:
 				missing_count += 1
-				#if (0,d.atoms[1].type.index2,d.atoms[2].type.index2,0) in dihedral_types_by_index2:
-				#	missing_count -= 1
+				if close_ok and (0,d.atoms[1].type.index2,d.atoms[2].type.index2,0) in dihedral_types_by_index2:
+					missing_count -= 1
 		return missing_count
 	
-	taboo_list = [0 for a in atoms]
-	best_error = missing_dihedrals()
-	for i in range(100):
-		best_error_this_time = len(dihedrals)*10
-		best_i = 0
-		best_type = None
-		for i,a in enumerate(atoms):
+	def anneal(T_max, steps, close_ok):
+		best_error = missing_dihedrals(close_ok)
+		for T in numpy.arange(T_max,0.,-T_max/steps):
+			a = random.choice(atoms)
 			old_type = a.type
 			a.type = random.choice(atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))])
-			error = missing_dihedrals()
-			if error < best_error_this_time:
-				best_error_this_time = error
-				best_i = i
-				best_type = a.type
-			if taboo_list[i]>0:
-				taboo_list[i] -= 1
-			a.type = old_type
-		
-		if taboo_list[best_i]==0 or best_error_this_time < best_error:
-			taboo_list[best_i] = 5
-			if best_error_this_time < best_error: best_error = best_error_this_time
-			atoms[best_i].type = best_type
-		else:
-			best_error_this_time = len(dihedrals)*10
-			best_i = 0
-			best_type = None
-			for i,a in enumerate(atoms):
-				if taboo_list[i]>0: continue
-				old_type = a.type
-				a.type = random.choice(atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))])
-				error = missing_dihedrals()
-				if error < best_error_this_time:
-					best_error_this_time = error
-					best_i = i
-					best_type = a.type
+			error = missing_dihedrals(close_ok)
+			#print (best_error-error)
+			if error < best_error or random.random() < math.exp( (best_error-error)/T ):
+				best_error = error
+				#print error
+			else:
 				a.type = old_type
-			taboo_list[best_i] = 5
-			atoms[best_i].type = best_type
-		print best_error_this_time, best_error
+	
+	anneal(1.,1000,False)
+			
+	for a in atoms:
+		print a.type.notes
+	print missing_dihedrals(False)
+	
+	anneal(0.1,1000,True)
+			
+	for a in atoms:
+		print a.type.notes
+	print missing_dihedrals(True)
+	
 	
 	'''
 	atoms_by_index2 = {}
