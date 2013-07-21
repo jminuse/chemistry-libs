@@ -40,12 +40,33 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 	for a in atoms:
 		a.type = atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))][0]
 	
-	dihedral_types_by_index2 = dict([ (t.index2s,t) for t in dihedral_types])
-	#index2s = dict([ for a in atoms])
-	#print dihedral_types_by_index2.keys()
+	dihedral_types_by_index2 = dict([ (t.index2s,t) for t in dihedral_types] + [ (t.index2s[::-1],t) for t in dihedral_types])
+	angle_types_by_index2 = dict([ (t.index2s,t) for t in angle_types] + [ (t.index2s[::-1],t) for t in angle_types])
+	bond_types_by_index2 = dict([ (t.index2s,t) for t in bond_types] + [ (t.index2s[::-1],t) for t in bond_types])
 	
-	def missing_dihedrals(close_ok):
+	def get_bond_type(options):
+		for o1 in options[0]:
+			for o2 in options[1]:
+				if (o1.index2, o2.index2) in bond_types_by_index2:
+					return o1, o2
+	
+	for b in bonds:
+		options = [atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))] for a in b.atoms]
+		if not get_bond_type(options):
+			raise Exception(b)
+
+	for ii in range(1000):
+		b = random.choice(bonds)
+		if (b.atoms[0].type.index2, b.atoms[1].type.index2) not in bond_types_by_index2:
+			options = [atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))] for a in b.atoms]
+			if get_bond_type(options):
+				b.atoms[0].type, b.atoms[1].type = get_bond_type(options)
+	
+	def missing_params(close_ok):
 		missing_count = 0
+		for b in bonds:
+			if (b.atoms[0].type.index2, b.atoms[1].type.index2) not in bond_types_by_index2:
+				missing_count += 100
 		for d in dihedrals:
 			if tuple([a.type.index2 for a in d.atoms]) not in dihedral_types_by_index2:
 				missing_count += 1
@@ -53,13 +74,13 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 					missing_count -= 1
 		return missing_count
 	
-	def anneal(T_max, steps, close_ok):
-		best_error = missing_dihedrals(close_ok)
+	def anneal_params(T_max, steps, close_ok):
+		best_error = missing_params(close_ok)
 		for T in numpy.arange(T_max,0.,-T_max/steps):
 			a = random.choice(atoms)
 			old_type = a.type
 			a.type = random.choice(atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))])
-			error = missing_dihedrals(close_ok)
+			error = missing_params(close_ok)
 			#print (best_error-error)
 			if error < best_error or random.random() < math.exp( (best_error-error)/T ):
 				best_error = error
@@ -67,48 +88,166 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 			else:
 				a.type = old_type
 	
-	anneal(1.,1000,False)
-			
+	anneal_params(1.,10000,False)
+	anneal_params(0.1,10000,True)
+	
 	for a in atoms:
 		print a.type.notes
-	print missing_dihedrals(False)
+	print missing_params(True)
 	
-	anneal(0.1,1000,True)
-			
+	'''
+	def get_dihedral_type(options):
+		for o1 in options[0]:
+			for o2 in options[1]:
+				for o3 in options[2]:
+					for o4 in options[3]:
+						if (o1.index2, o2.index2, o3.index2, o4.index2) in dihedral_types_by_index2:
+							return o1, o2, o3, o4
+
+	for ii in range(10):
+		d = random.choice(dihedrals)
+		if tuple([a.type.index2 for a in d.atoms]) not in dihedral_types_by_index2:
+			options = [atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))] for a in d.atoms]
+			result = get_dihedral_type(options)
+			if result:
+				d.atoms[0].type, d.atoms[1].type, d.atoms[2].type, d.atoms[3].type = result
+	
 	for a in atoms:
 		print a.type.notes
-	print missing_dihedrals(True)
-	
-	
+	print missing_params(True)
 	'''
-	atoms_by_index2 = {}
-	for a in atom_types:
-		if a.index2 not in atoms_by_index2: atoms_by_index2[a.index2] = []
-		atoms_by_index2[a.index2].append(a)
-	for index2, atom_list in atoms_by_index2: #check that all atoms of the same index2 have the same element, bond_count
-		element, bond_count = atom_list[0].element, atom_list[0].bond_count
-		for a in atom_list[1:]:
-			if a.element != element and a.bond_count != bond_count:
-				raise Exception('Atoms with the same index2 do not have the same element, bond_count', atom_list[0], a)
-	dihedral_types_by_atom_type = {}
-	for d in dihedral_types:
-		#assumes all atoms of the same index2 have the same element, bond_count
-		types = tuple([(atoms_by_index2[index2][0].element, atoms_by_index2[index2][0].bond_count) for index2 in d.atoms])
-		if types not in dihedral_types_by_atom_type: dihedral_types_by_atom_type[types] = []
-		if reversed(types) not in dihedral_types_by_atom_type: dihedral_types_by_atom_type[reversed(types)] = []
-		dihedral_types_by_atom_type[types].append(d)
-		dihedral_types_by_atom_type[reversed(types)].append(d)
 	
-	atom_types_by_element_and_bond_count = dict([((a.element, a.bond_count), atom_type) for a in atom_types])
-	atom_type_options = [ atom_types_by_element_and_bond_count[(atom.element, atom.bond_count)] for atom in atoms ]
-	dihedral_type_options = []
-	for d in dihedrals:
-		#assumes all atoms of the same index2 have the same element, bond_count
-		types = tuple([atoms_by_index2[index2].element, atoms_by_index2[index2].bond_count for index2 in d.atoms])
-		options = dihedral_types_by_atom_type[types]
-		#rule out conflicting atom types
-		
-		
-		dihedral_type_options.append( options )
-	'''
+	#atom_types_used = dict([(a.type,True) for a in atoms]).keys()
+	#bond_types_used = [ bond_types_by_index2[(b.atoms[0].type.index2,b.atoms[1].type.index2)] for b in bonds]
+	#angle_types_used = [ angle_types_by_index2[(a.atoms[0].type.index2,a.atoms[1].type.index2,a.atoms[2].type.index2)] for a in angles]
+	#dihedral_types
+	
+	#return atom_types_used, bond_types_used, angle_types_used, dihedral_types_used
+
+
+"""
+def write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name):
+	elements, atom_types, bond_types, angle_types, dihedral_types = starting_params
+	
+	f = open(run_name+".data", 'w')
+	f.write('''LAMMPS Description
+
+'''+str(len(atoms))+'''  atoms
+'''+str(len(bonds))+'''  bonds
+'''+str(len(angles))+'''  angles
+'''+str(len(dihedrals))+'''  dihedrals
+0  impropers
+
+'''+str(len(atom_types_used.keys()))+'''  atom types
+'''+str(len())+'''  bond types
+'''+str(len())+'''  angle types
+'''+str(len())+'''  dihedral types
+0  improper types
+
+ -'''+str(box_size[0]/2)+''' '''+str(box_size[0]/2)+''' xlo xhi
+ -'''+str(box_size[1]/2)+''' '''+str(box_size[1]/2)+''' ylo yhi
+ -'''+str(box_size[2]/2)+''' '''+str(box_size[2]/2)+''' zlo zhi
+
+Masses			
+
+'''+('\n'.join(["%d\t%s" % (index, opls_atoms[number-1][0]) for number,index in sorted(atom_indices.items(), key=lambda x: x[1])]))+'''
+
+Pair Coeffs
+
+'''+('\n'.join(["%d\t%s\t%s" % (index, opls_atoms[number-1][3], opls_atoms[number-1][2]) for number,index in sorted(atom_indices.items(), key=lambda x: x[1])])) )
+
+	if bonds: f.write("\n\nBond Coeffs\n\n"+'\n'.join(["%d\t%s\t%s" % data for ID,data in sorted(bond_indices.items(), key=lambda x: x[1][0])]))
+	if angles: f.write("\n\nAngle Coeffs\n\n"+'\n'.join(["%d\t%s\t%s" % data for ID,data in sorted(angle_indices.items(), key=lambda x: x[1][0])]))
+	if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d\t%s\t%s\t%s\t%s" % data for ID,data in sorted(dihedral_indices.items(), key=lambda x: x[1][0])]))
+
+	f.write("\n\nAtoms\n\n"+'\n'.join( ['\t'.join( [str(q) for q in [i+1]+list(a[:-1])] ) for i,a in enumerate(atoms)]) ) #atom (molecule type charge x y z)
+
+	if bonds: f.write('\n\nBonds\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1]+list(b)]) for i,b in enumerate(bonds)]) ) #bond (type a b)
+	if angles: f.write('\n\nAngles\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1]+list(a)]) for i,a in enumerate(angles)]) ) #ID type atom1 atom2 atom3
+	if dihedrals: f.write('\n\nDihedrals\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1]+list(d)]) for i,d in enumerate(dihedrals)]) ) #ID type a b c d
+	if impropers: f.write('\n\nImpropers\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1]+list(p)]) for i,p in enumerate(impropers)]) ) #ID type a b c d
+	f.write('\n\n')
+	f.close()
+
+
+def write_input_file():
+	f = open(run_name+".in", 'w')
+	f.write('''units	real
+atom_style	full #bonds, angles, dihedrals, impropers, charges
+'''+("newton off\npackage gpu force/neigh 0 1 1" if run_on == 'gpu' else "")+'''
+
+pair_style	lj/cut/coul/long'''+("/gpu" if run_on == 'gpu' else "")+''' 9 8
+bond_style harmonic
+angle_style harmonic
+dihedral_style opls
+kspace_style pppm 1.0e-4
+special_bonds lj/coul 0.0 0.0 0.5
+
+read_data	'''+run_name+'''.data
+
+#thermo_style custom evdwl ecoul ebond eangle edihed etotal 
+thermo_style custom temp press vol pe etotal tpcpu
+thermo		300#'''+str(max(100,steps/100))+'''
+
+#dump	1 all xyz '''+str(max(10,steps/1000))+''' '''+run_name+'''.xyz
+dump	1 all xyz 100 '''+run_name+'''.xyz
+
+minimize 0.0 1.0e-8 1000 100000
+
+velocity all create 5000 1 rot yes dist gaussian
+timestep 1.0
+fix anneal all nvt temp 5000 1 10
+print "anneal"
+run 30000
+unfix anneal
+
+minimize 0.0 1.0e-8 1000 100000
+
+#velocity all create '''+str(T)+''' 1 rot yes dist gaussian
+#timestep 2.0
+#fix pressurize all npt temp '''+str(T)+''' '''+str(T)+''' 10 iso '''+str(P)+" "+str(P)+''' 100
+#print "Pressurize"
+#run 3000
+#unfix pressurize
+
+#velocity all create '''+str(T)+''' 1 rot yes dist gaussian
+#timestep 2.0
+#fix 1 all nvt temp '''+str(T)+" "+str(T)+''' 100
+
+#print "Running"
+#run	'''+str(steps))
+	f.close()
+
+	if run_on == 'cluster':
+		f = open(run_name+".nbs", 'w')
+		f.write('''#!/bin/bash
+##NBS-nproc: 4
+##NBS-speed: 3000
+##NBS-queue: "batch"
+
+$NBS_PATH/mpiexec /fs/home/jms875/bin/lammps -in %s.in > %s.log
+''' % (run_name, run_name) )
+		f.close()
+		os.system("jsub "+run_name+".nbs")
+	elif run_on == 'gpu':
+		f = open(run_name+".nbs", 'w')
+		f.write('''#!/bin/bash
+##NBS-nproc: 2
+##NBS-queue: "gpudev"
+
+export PATH="$PATH:/opt/nvidia/cuda/bin"
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/opt/nvidia/cuda/lib64"
+$NBS_PATH/mpiexec /fs/home/jms875/bin/lammps_gpu -in %s.in > %s.log
+''' % (run_name, run_name) )
+		f.close()
+		os.system("jsub "+run_name+".nbs")
+	else:
+		if os.system("lammps < "+run_name+".in") == 0:
+			os.system("python view.py "+run_name)
+
+def anneal(atoms, bonds, angles, dihedrals, starting_params):
+	write_data_file(atoms, bonds, angles, dihedrals, starting_params)
+	write_input_file()
+	run()
+"""
 
