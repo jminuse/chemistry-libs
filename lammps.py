@@ -67,6 +67,9 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 		for b in bonds:
 			if (b.atoms[0].type.index2, b.atoms[1].type.index2) not in bond_types_by_index2:
 				missing_count += 100
+		for a in angles:
+			if tuple([atom.type.index2 for atom in a.atoms]) not in angle_types_by_index2:
+				missing_count += 2
 		for d in dihedrals:
 			if tuple([a.type.index2 for a in d.atoms]) not in dihedral_types_by_index2:
 				missing_count += 1
@@ -95,34 +98,36 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 		print a.type.notes
 	print missing_params(True)
 	
-	'''
-	def get_dihedral_type(options):
-		for o1 in options[0]:
-			for o2 in options[1]:
-				for o3 in options[2]:
-					for o4 in options[3]:
-						if (o1.index2, o2.index2, o3.index2, o4.index2) in dihedral_types_by_index2:
-							return o1, o2, o3, o4
-
-	for ii in range(10):
-		d = random.choice(dihedrals)
+	
+	c1,c2,c3 = 0,0,0
+	for b in bonds:
+		if (b.atoms[0].type.index2, b.atoms[1].type.index2) not in bond_types_by_index2:
+			c1 += 1
+	for a in angles:
+		if tuple([atom.type.index2 for atom in a.atoms]) not in angle_types_by_index2:
+			c2 += 1
+	for d in dihedrals:
 		if tuple([a.type.index2 for a in d.atoms]) not in dihedral_types_by_index2:
-			options = [atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))] for a in d.atoms]
-			result = get_dihedral_type(options)
-			if result:
-				d.atoms[0].type, d.atoms[1].type, d.atoms[2].type, d.atoms[3].type = result
+			c3 += 1
+			if (0,d.atoms[1].type.index2,d.atoms[2].type.index2,0) in dihedral_types_by_index2:
+				c3 -= 1
+	print c1, c2, c3
 	
-	for a in atoms:
-		print a.type.notes
-	print missing_params(True)
-	'''
 	
-	#atom_types_used = dict([(a.type,True) for a in atoms]).keys()
-	#bond_types_used = [ bond_types_by_index2[(b.atoms[0].type.index2,b.atoms[1].type.index2)] for b in bonds]
-	#angle_types_used = [ angle_types_by_index2[(a.atoms[0].type.index2,a.atoms[1].type.index2,a.atoms[2].type.index2)] for a in angles]
-	#dihedral_types
+	bond_types_used = [ bond_types_by_index2[(b.atoms[0].type.index2,b.atoms[1].type.index2)] for b in bonds]
 	
-	#return atom_types_used, bond_types_used, angle_types_used, dihedral_types_used
+	#for a in angles:
+	angle_types_used = [ angle_types_by_index2[(a.atoms[0].type.index2,a.atoms[1].type.index2,a.atoms[2].type.index2)] for a in angles]
+	
+	dihedral_types_used = []
+	for d in dihedrals:
+		index2s = tuple([a.type.index2 for a in d.atoms])
+		if index2s in dihedral_types_by_index2:
+			dihedrals.append(dihedral_types_by_index2[index2s])
+		else:
+			dihedrals.append(None)
+	
+	return bond_types_used, angle_types_used, dihedral_types_used
 
 
 """
