@@ -8,7 +8,7 @@ def dihedral_angle(a,b,c,d):
 	dd = dist_squared
 	dd12, dd23, dd34, dd24, dd13, dd14 = dd(a,b), dd(b,c), dd(c,d), dd(b,d), dd(a,c), dd(a,d)
 
-	dd12, dd23, dd34, dd24, dd13, dd14 = [i+random.random()*1e-10 for i in (dd12, dd23, dd34, dd24, dd13, dd14)]
+	dd12, dd23, dd34, dd24, dd13, dd14 = [i+(random.random()+0.5)*1e-6 for i in (dd12, dd23, dd34, dd24, dd13, dd14)]
 
 	P = dd12*(dd23+dd34-dd24) + dd23*(-dd23+dd34+dd24) + dd13*(dd23-dd34+dd24) - 2*dd23*dd14
 	d12,d23,d34,d24,d13 = [math.sqrt(i) for i in dd12,dd23,dd34,dd24,dd13]
@@ -21,8 +21,8 @@ def get_bonds(atoms):
 	for i,a in enumerate(atoms):
 		for b in atoms[i+1:]:
 			d = dist_squared(a,b)**0.5
-			if (a.element!='H' and b.element!='H' and d<2.) or d < 1.2:
-				bonds.append( utils.Struct(atoms=(a,b), d=d) ) #offset from current, distance
+			if (a.element!=1 and b.element!=1 and d<2.) or d < 1.2:
+				bonds.append( utils.Struct(atoms=(a,b), d=d, e=None) ) #offset from current, distance
 				a.bonds.append(b)
 				b.bonds.append(a)
 	return bonds
@@ -37,7 +37,7 @@ def get_angles_and_dihedrals(atoms, bonds):
 				N = math.sqrt((a.z-b.z)**2+(a.x-b.x)**2+(a.y-b.y)**2)
 				B = math.sqrt((center.z-a.z)**2+(center.x-a.x)**2+(center.y-a.y)**2)
 				theta = 180/math.pi*math.acos((A**2+B**2-N**2)/(2*A*B))
-				angles.append( utils.Struct( atoms=(a,center,b), theta=theta) )
+				angles.append( utils.Struct( atoms=(a,center,b), theta=theta, e=None) )
 	dihedral_set = {}
 	for angle in angles:
 		for a in angle.atoms[0].bonded:
@@ -51,7 +51,7 @@ def get_angles_and_dihedrals(atoms, bonds):
 			dihedral = angle.atoms + (b,)
 			if reversed(dihedral) not in dihedral_set:
 				dihedral_set[dihedral] = True
-	dihedrals = [utils.Struct( atoms=d, theta=dihedral_angle(d[0],d[1],d[2],d[3]) ) for d in dihedral_set.keys()]
+	dihedrals = [utils.Struct( atoms=d, theta=dihedral_angle(d[0],d[1],d[2],d[3]), e=None ) for d in dihedral_set.keys()]
 	
 	return angles, dihedrals
 
@@ -60,14 +60,14 @@ def parse_tinker_arc(molecule_file):
 	for line in open(molecule_file):
 		columns = line.split()
 		if len(columns)>3:
-			atoms.append( utils.Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=None) )
+			atoms.append( utils.Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=None, charge=None) )
 	bond_set = {}
 	for a in atoms:
 		a.bonded = [atoms[i-1] for i in a.bonded]
 		for b in a.bonded:
 			if (b,a) not in bond_set:
 				bond_set[(a,b)] = True
-	bonds = [utils.Struct(atoms=b, d=dist_squared(b[0],b[1])**0.5) for b in bond_set.keys()]
+	bonds = [utils.Struct(atoms=b, d=dist_squared(b[0],b[1])**0.5, e=None) for b in bond_set.keys()]
 	angles, dihedrals = get_angles_and_dihedrals(atoms, bonds)
 	return atoms, bonds, angles, dihedrals
 
