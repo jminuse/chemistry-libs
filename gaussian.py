@@ -1,40 +1,22 @@
-import os, string, sys, re
+import os, string, sys, re, shutil
+import jsub, utils
 
-def job(atoms, basis, queue, run_name, job_type, extra_section='', chkfile=None):
-	processors = {'batch':'4','huge':'8','long':'8'}[queue]
-	memory = {'batch':'1GB','huge':'8GB','long':'4GB'}[queue]
-	if not chkfile:
-		chkfile = +run_name+'.chk'
-	head = '''#!/bin/csh
-##NBS-queue: '''+queue+'''
-##NBS-nproc: '''+processors+'''
-##NBS-speed: 3000
-##NBS-name: "'''+run_name+'''"
+def job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None):
+	head = '''#t '''+basis+''' '''+job_type+'''
 
-setenv g09root /usr/local/g09
-source $g09root/g09/bsd/g09.login
-g09 <<END > '''+run_name+'''.log
-%NProcShared='''+processors+'''
-%Mem='''+memory+'''
-%Chk='''+chkfile+'''
-#t '''+basis+''' '''+job_type+'''
-
-gaussian.py job
+run by gaussian.py
 
 0,1
 '''
 
-	tail = '''
-
-eof
-cd /tmp
-rm *.rwf
-'''
-	xyz = '\n'.join( ['\t'.join([str(s) for s in [a.element, a.x, a.y, a.z]]) for a in atoms] ) 
+	xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
 
 	os.chdir('gaussian')
-	open(run_name+'.gjf', 'w').write(head+xyz+extra_section+tail)
-	os.system('jsub '+run_name+'.gjf')
+	with open(run_name+'.inp', 'w') as inp:
+		inp.write(head+xyz+extra_section)
+	#os.system('g09sub '+run_name+' -chk -disk 8192 -nproc 4 -queue huge -xhost sys_eei sys_icse')
+	os.system('g09sub '+run_name+' -chk -queue '+queue+(' -nproc '+str(procs)+' ' if procs else '')+'-xhost sys_eei sys_icse')
+	#os.system('g09sub '+run_name)
 	os.chdir('..')
 
 def parse_coords(input_file):
@@ -42,8 +24,8 @@ def parse_coords(input_file):
 	if 'Normal termination of Gaussian 09' not in contents:
 		return None
 
-	a = contents[contents.rindex('SCF Done'):contents.index('\n', contents.rindex('SCF Done'))]
-	print a
+	energy_line = contents[contents.rindex('SCF Done'):contents.index('\n', contents.rindex('SCF Done'))]
+	energy = float(re.search('SCF Done: +\S+ += +(\S+)', energy_line).group(1))
 
 	last_coordinates = contents.rindex('Coordinates (Angstroms)')
 
@@ -55,10 +37,15 @@ def parse_coords(input_file):
 		element = columns[1]
 		x,y,z = [float(s) for s in columns[3:6]]
 		coords.append( (x, y, z) )
-	return coords
+	return energy, coords
 	
 def parse_chelpg(input_file):
-	contents = open(input_file).read()
+	#os.system('ls gaussian') #test
+	#print ''
+	print os.getcwd()
+	
+	with open(input_file) as inp:
+		contents = inp.read()
 	if 'Normal termination of Gaussian 09' not in contents:
 		return None
 	
@@ -71,53 +58,63 @@ def parse_chelpg(input_file):
 			charges.append( float(columns[2]) )
 	return charges
 
-def minimize(atoms, levels_of_theory, queue='batch'): #blocks until done
+def minimize(atoms, levels_of_theory, queue='batch', name=''): #blocks until done
 	for theory in levels_of_theory:
-		run_number = 0
-		while True:
-			run_name = 'minimize_'+theory.translate( string.maketrans('/(),', '----') )+'_'+run_number
-			run_number += 1
-			if not os.path.exists(run_name+'.log'): break
+		run_name = utils.unique_filename('gaussian/', 'minimize_'+name+'_'+theory.translate( string.maketrans('/(),*', '-----') ), '.log')
 		
 		job(atoms, theory, queue, run_name, 'Opt')
-		while(True):
-			jlist = subprocess.Popen('jlist', shell=True, stdout=subprocess.PIPE).communicate()[0]
-			if run_name in jlist:
-				os.sleep(60)
-			else:
-				break
-		coords = parse_coords(run_name+'.log')
+		jsub.wait(run_name)
+		energy, coords = parse_coords('gaussian/'+run_name+'.log')
 		if coords:
 			for i,xyz in enumerate(coords):
 				atoms[i].x, atoms[i].y, atoms[i].z = xyz
-			return run_name
+			return run_name, energy
 
-def chelpg(atoms, level_of_theory, queue='batch', chkfile=None):
-	run_number = 0
-	while True:
-		run_name = 'chelpg_'+theory.translate( string.maketrans('/(),', '----') )+'_'+run_number
-		run_number += 1
-		if not os.path.exists(run_name+'.log'): break
-	
-	job(atoms, theory, queue, run_name, 'Pop=CHelpG', chkfile=chkfile)
-	while(True):
-		jlist = subprocess.Popen('jlist', shell=True, stdout=subprocess.PIPE).communicate()[0]
-		if run_name in jlist:
-			os.sleep(60)
-		else:
-			break
-	charges = parse_chelpg(run_name+'.log')
+def chelpg(atoms, theory, queue='batch', chkfile_run_name=None, name=''):
+	run_name = utils.unique_filename('gaussian/', 'chelpg_'+name+'_'+theory.translate( string.maketrans('/(),*', '-----') ), '.log')
+	if chkfile_run_name:
+		shutil.copyfile('gaussian/'+chkfile_run_name+'.chk', 'gaussian/'+run_name+'.chk')
+	job(atoms, theory, queue, run_name, 'Pop=CHelpG')
+	jsub.wait(run_name)
+	charges = parse_chelpg('gaussian/'+run_name+'.log')
 	if charges:
 		for i,charge in enumerate(charges):
 			atoms[i].charge = charge
+		return charges
+
+def bond_energy(atoms, bond, theory, queue, chkfile, async=False, inc=None, name=''):
+	run_name = utils.unique_filename('gaussian/', 'bond_'+name, '.inp')
+	#if chkfile:
+	#	shutil.copyfile('gaussian/'+chkfile+'.chk', 'gaussian/'+run_name+'.chk')
+	job(atoms, theory, queue, run_name, 'SP Geom=ModRedundant', extra_section='B %d %d +=%f'%(bond.atoms[0].index, bond.atoms[1].index, inc or bond.d*0.05), procs=1 )
+	if async:
 		return run_name
+	else:
+		jsub.wait(run_name)
+		energy, coords = parse_coords('gaussian/'+run_name)
+		return energy, coords
 
-def bond_energies(xyz, bonds, theory):
-	pass
+def angle_energy(atoms, angle, theory, queue, chkfile, async=False, inc=3.0, name=''):
+	run_name = utils.unique_filename('gaussian/', 'angle_'+name, '.inp')
+	#if chkfile:
+	#	shutil.copyfile('gaussian/'+chkfile+'.chk', 'gaussian/'+run_name+'.chk')
+	job(atoms, theory, queue, run_name, 'SP Geom=ModRedundant', extra_section='A %d %d %d +=%f'%(angle.atoms[0].index, angle.atoms[1].index, angle.atoms[2].index, inc), procs=1 )
+	if async:
+		return run_name
+	else:
+		jsub.wait(run_name)
+		energy, coords = parse_coords('gaussian/'+run_name)
+		return energy, coords
 
-def angle_energies(xyz, angles, theory):
-	pass
-
-def dihedral_energies(xyz, dihedrals, theory):
-	pass
+def dihedral_energy(atoms, dihedral, theory, queue, chkfile, async=False, inc=None, name=''):
+	run_name = utils.unique_filename('gaussian/', 'dihedral_'+name, '.inp')
+	#if chkfile:
+	#	shutil.copyfile('gaussian/'+chkfile+'.chk', 'gaussian/'+run_name+'.chk')
+	job(atoms, theory, queue, run_name, 'SP Geom=ModRedundant', extra_section='D %d %d %d %d +=%f'%(dihedral.atoms[0].index, dihedral.atoms[1].index, dihedral.atoms[2].index, dihedral.atoms[2].index, inc), procs=1 )
+	if async:
+		return run_name
+	else:
+		jsub.wait(run_name)
+		energy, coords = parse_coords('gaussian/'+run_name)
+		return energy, coords
 

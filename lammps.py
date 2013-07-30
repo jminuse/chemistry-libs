@@ -1,5 +1,5 @@
 import re, random, numpy, math, os, subprocess
-import utils
+import utils, jsub
 
 def parse_opls_parameters(parameter_file):
 	elements = {}; atom_types = []; bond_types = []; angle_types = []; dihedral_types = []
@@ -129,6 +129,7 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 	
 	
 	bond_types_used = [ bond_types_by_index2[(b.atoms[0].type.index2,b.atoms[1].type.index2)] for b in bonds]
+	for i,b in enumerate(bonds): b.e = bond_types_used[i].e
 	
 	angle_types_used = []
 	for a in angles:
@@ -137,6 +138,7 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 			angle_types_used.append(angle_types_by_index2[index2s])
 		else:
 			angle_types_used.append( utils.Struct(angle=180., e=0.) )
+	for i,a in enumerate(angles): a.e = angle_types_used[i].e
 	
 	dihedral_types_used = []
 	for d in dihedrals:
@@ -145,7 +147,8 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 			dihedral_types_used.append(dihedral_types_by_index2[index2s])
 		else:
 			dihedral_types_used.append( utils.Struct(e=(0.,0.,0.,0.)) )
-			
+	for i,d in enumerate(dihedrals): d.e = dihedral_types_used[i].e	
+	
 	for a in atoms:
 		a.charge = a.type.charge
 	net_charge = sum([a.charge for a in atoms])
@@ -173,7 +176,8 @@ def write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name):
 	
 	box_size = (100,100,100)
 	
-	f = open(run_name+".data", 'w')
+	os.chdir('lammps')
+	f = open(run_name+'.data', 'w')
 	f.write('''LAMMPS Description
 
 '''+str(len(atoms))+'''  atoms
@@ -214,7 +218,7 @@ Pair Coeffs
 	if dihedrals: f.write('\n\nDihedrals\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, dihedral_type_numbers[dihedral_types[i]]]+[atom.index for atom in d.atoms] ]) for i,d in enumerate(dihedrals)]) ) #ID type a b c d
 	f.write('\n\n')
 	f.close()
-
+	os.chdir('..')
 
 
 
@@ -222,16 +226,18 @@ def run(run_name, run_type='anneal', run_on='none'):
 	steps = 1000
 	T = 94
 	P = 1.5
+	os.chdir('lammps')
 	f = open(run_name+".in", 'w')
 	f.write('''units	real
 atom_style	full #bonds, angles, dihedrals, impropers, charges
 '''+("newton off\npackage gpu force/neigh 0 1 1" if run_on == 'gpu' else "")+'''
 
-pair_style	lj/cut/coul/long'''+("/gpu" if run_on == 'gpu' else "")+''' 10.0 8.0
+#pair_style	lj/cut/coul/long'''+("/gpu" if run_on == 'gpu' else "")+''' 10.0 8.0
+pair_style lj/cut/coul/cut 10.0 8.0
 bond_style harmonic
 angle_style harmonic
 dihedral_style opls
-kspace_style pppm 1.0e-6
+#kspace_style pppm 1.0e-6
 special_bonds lj/coul 0.0 0.0 0.5
 
 read_data	'''+run_name+'''.data
@@ -293,23 +299,86 @@ $NBS_PATH/mpiexec /fs/home/jms875/bin/lammps_gpu -in %s.in > %s.log
 		os.system("jsub "+run_name+".nbs")
 	else:
 		if os.system("lammps < "+run_name+".in") == 0:
-			os.system("python view.py "+run_name)
+			pass#os.system("python view.py "+run_name)
+			
+	os.chdir('..')
 
-def anneal(atoms, bonds, angles, dihedrals, starting_params):
-	run_number = 0
-	while True:
-		run_name = 'anneal_'+str(run_number)
-		if not os.path.exists(run_name+'.data'): break
-		run_number += 1
+def anneal(atoms, bonds, angles, dihedrals, starting_params, name=''):
+	run_name = utils.unique_filename('lammps/', 'anneal_'+name, '.data')
+	
 	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
 	run(run_name)
-	while(True):
-		jlist = subprocess.Popen('jlist', shell=True, stdout=subprocess.PIPE).communicate()[0]
-		if run_name in jlist:
-			os.sleep(60)
-		else:
-			break
-	for i,line in enumerate(subprocess.Popen('tail '+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0].splitlines()):
+	jsub.wait(run_name)
+	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
+	if 'No such file or directory' in tail:
+		raise Exception('Anneal '+run_name+' failed')
+	for i,line in enumerate(tail.splitlines()):
 		atoms[i].x, atoms[i].y, atoms[i].z = [float(s) for s in line.split()[1:]]
 	return atoms
 	
+def energy(coords, atoms, bonds, angles, dihedrals, params):
+	box_size = (100,100,100)
+	os.chdir('lammps')
+	f = open('energy.data', 'w')
+	f.write('''LAMMPS Description
+
+'''+str(len(atoms))+'''  atoms
+'''+str(len(bonds))+'''  bonds
+'''+str(len(angles))+'''  angles
+'''+str(len(dihedrals))+'''  dihedrals
+0  impropers
+
+'''+str(len(atoms))+'''  atom types
+'''+str(len(bonds))+'''  bond types
+'''+str(len(angles))+'''  angle types
+'''+str(len(dihedrals))+'''  dihedral types
+0  improper types
+
+ -'''+str(box_size[0]/2)+''' '''+str(box_size[0]/2)+''' xlo xhi
+ -'''+str(box_size[1]/2)+''' '''+str(box_size[1]/2)+''' ylo yhi
+ -'''+str(box_size[2]/2)+''' '''+str(box_size[2]/2)+''' zlo zhi
+
+Masses			
+
+'''+('\n'.join(["%d\t%f" % (atom.index, atom.type.mass) for atom in atoms]))+'''
+
+Pair Coeffs
+
+'''+('\n'.join(["%d\t%f\t%f" % (atom.index, atom.type.vdw_e, atom.type.vdw_r) for atom in atoms])) )
+
+	if bonds: f.write("\n\nBond Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, params.bond_e[i], bond.d) for i,bond in enumerate(bonds)]))
+	if angles: f.write("\n\nAngle Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, params.angle_e[i], angle.theta) for i,angle in enumerate(angles)]))
+	if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d\t%f\t%f\t%f\t%f" % ((i+1,)+tuple(params.dihedral_e[i])) for i,dihedral in enumerate(dihedrals) ]))
+
+	f.write("\n\nAtoms\n\n"+'\n'.join( ['\t'.join( [str(q) for q in (a.index, 1, a.index, a.charge)+tuple(coords[i])] ) for i,a in enumerate(atoms) ]) ) #atom (molecule type charge x y z)
+
+	if bonds: f.write('\n\nBonds\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1, b.atoms[0].index, b.atoms[1].index]]) for i,b in enumerate(bonds)]) ) #bond (type a b)
+	if angles: f.write('\n\nAngles\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in a.atoms] ]) for i,a in enumerate(angles)]) ) #ID type atom1 atom2 atom3
+	if dihedrals: f.write('\n\nDihedrals\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in d.atoms] ]) for i,d in enumerate(dihedrals)]) ) #ID type a b c d
+	f.write('\n\n')
+	f.close()
+
+	f = open('energy.in', 'w')
+	f.write('''units	real
+atom_style	full #bonds, angles, dihedrals, impropers, charges
+
+#pair_style	lj/cut/coul/long 10.0 8.0
+pair_style lj/cut/coul/cut 10.0 8.0
+bond_style harmonic
+angle_style harmonic
+dihedral_style opls
+#kspace_style pppm 1.0e-6
+special_bonds lj/coul 0.0 0.0 0.5
+
+read_data	energy.data
+
+thermo_style custom etotal
+
+run 0
+''')
+	f.close()
+	result = subprocess.Popen('lammps < energy.in', shell=True, stdout=subprocess.PIPE).communicate()[0]
+	energy = float( re.search('TotEng\s+(\S+)', result).group(1) )
+	os.chdir('..')
+	return energy
+
