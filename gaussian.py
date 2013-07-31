@@ -1,21 +1,23 @@
 import os, string, sys, re, shutil
 import jsub, utils
 
-def job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None):
+def job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None, alternate_coords=None):
 	head = '''#t '''+basis+''' '''+job_type+'''
 
 run by gaussian.py
 
 0,1
 '''
-
-	xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
+	if alternate_coords:
+		xyz = '\n'.join( ["%s %f %f %f" % (a.element,)+tuple(alternate_coords[i]) for i,a in enumerate(atoms)] ) + '\n\n'
+	else:
+		xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
 
 	os.chdir('gaussian')
 	with open(run_name+'.inp', 'w') as inp:
 		inp.write(head+xyz+extra_section)
 	#os.system('g09sub '+run_name+' -chk -disk 8192 -nproc 4 -queue huge -xhost sys_eei sys_icse')
-	os.system('g09sub '+run_name+' -chk -queue '+queue+(' -nproc '+str(procs)+' ' if procs else '')+'-xhost sys_eei sys_icse')
+	os.system('g09sub '+run_name+' -chk -queue '+queue+(' -nproc '+str(procs)+' ' if procs else '')+' -xhost sys_eei sys_icse')
 	#os.system('g09sub '+run_name)
 	os.chdir('..')
 
@@ -81,6 +83,18 @@ def chelpg(atoms, theory, queue='batch', chkfile_run_name=None, name=''):
 		for i,charge in enumerate(charges):
 			atoms[i].charge = charge
 		return charges
+
+def energy(atoms, bond, theory, queue, chkfile, async=False, name='', alternate_coords=None):
+	run_name = utils.unique_filename('gaussian/', 'energy_'+name, '.inp')
+	#if chkfile:
+	#	shutil.copyfile('gaussian/'+chkfile+'.chk', 'gaussian/'+run_name+'.chk')
+	job(atoms, theory, queue, run_name, 'SP', procs=1, alternate_coords=alternate_coords)
+	if async:
+		return run_name
+	else:
+		jsub.wait(run_name)
+		energy, coords = parse_coords('gaussian/'+run_name)
+		return energy, coords
 
 def bond_energy(atoms, bond, theory, queue, chkfile, async=False, inc=None, name=''):
 	run_name = utils.unique_filename('gaussian/', 'bond_'+name, '.inp')

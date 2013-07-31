@@ -319,14 +319,13 @@ dihedral_style opls
 special_bonds lj/coul 0.0 0.0 0.5
 
 read_data	'''+run_name+'''.data
-'''+('fix holdme all restrain '+( {2:'bond','3':angle,'4':dihedral}[len(restrained.atoms)] )+' '.join([a.index for a in restrained.atoms])+' 2000.0 2000.0 '+str(restraint_value) if restraint else '')+'''
+'''+('fix holdit all restrain '+( {2:'bond',3:'angle',4:'dihedral'}[len(restrained.atoms)] )+' '+' '.join([str(a.index) for a in restrained.atoms])+' 2000.0 2000.0 '+str(restraint_value) if restrained else '')+'''
 thermo_style custom pe
-thermo		300
-dump	1 all xyz 100 '''+run_name+'''.xyz
-minimize 0.0 1.0e-8 1000 100000
-''')
+dump	1 all xyz 1000 '''+run_name+'''.xyz
+minimize 0.0 1.0e-8 1000 100000\n\n''')
 	f.close()
-	os.system("lammps < "+run_name+".in")
+	if os.system("lammps < "+run_name+".in") != 0:
+		raise Exception('Minimize failed')
 	os.chdir('..')
 	
 
@@ -343,12 +342,12 @@ def anneal(atoms, bonds, angles, dihedrals, starting_params, name=''):
 	return atoms
 
 def minimize(atoms, bonds, angles, dihedrals, starting_params, name='', restrained=None, restraint_value=None):
-	run_name = utils.unique_filename('lammps/', 'minimize_'+name, '.data')
+	run_name = 'minimize'
 	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
 	run_minimize(run_name, restrained=restrained, restraint_value=restraint_value)
 	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
-	if 'No such file or directory' in tail:
-		raise Exception('Minimize '+run_name+' failed')
+	if not tail:
+		raise Exception('Minimize failed')
 	return [[float(xyz) for xyz in line.split()[1:]] for line in tail.splitlines()]
 
 def energy(coords, atoms, bonds, angles, dihedrals, params):
