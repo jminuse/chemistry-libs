@@ -221,8 +221,7 @@ Pair Coeffs
 	os.chdir('..')
 
 
-
-def run(run_name, run_type='anneal', run_on='none'):
+def run_anneal(run_name, run_on='none'):
 	steps = 1000
 	T = 94
 	P = 1.5
@@ -302,12 +301,39 @@ $NBS_PATH/mpiexec /fs/home/jms875/bin/lammps_gpu -in %s.in > %s.log
 			pass#os.system("python view.py "+run_name)
 			
 	os.chdir('..')
+	
+	
+	
+def run_minimize(run_name, restrained=None, restraint_value=None):
+	os.chdir('lammps')
+	f = open(run_name+".in", 'w')
+	f.write('''units	real
+atom_style	full #bonds, angles, dihedrals, impropers, charges
+
+#pair_style	lj/cut/coul/long 10.0 8.0
+pair_style lj/cut/coul/cut 10.0 8.0
+bond_style harmonic
+angle_style harmonic
+dihedral_style opls
+#kspace_style pppm 1.0e-6
+special_bonds lj/coul 0.0 0.0 0.5
+
+read_data	'''+run_name+'''.data
+'''+('fix holdme all restrain '+( {2:'bond','3':angle,'4':dihedral}[len(restrained.atoms)] )+' '.join([a.index for a in restrained.atoms])+' 2000.0 2000.0 '+str(restraint_value) if restraint else '')+'''
+thermo_style custom pe
+thermo		300
+dump	1 all xyz 100 '''+run_name+'''.xyz
+minimize 0.0 1.0e-8 1000 100000
+''')
+	f.close()
+	os.system("lammps < "+run_name+".in")
+	os.chdir('..')
+	
 
 def anneal(atoms, bonds, angles, dihedrals, starting_params, name=''):
 	run_name = utils.unique_filename('lammps/', 'anneal_'+name, '.data')
-	
 	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
-	run(run_name)
+	run_anneal(run_name)
 	jsub.wait(run_name)
 	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
 	if 'No such file or directory' in tail:
@@ -315,7 +341,16 @@ def anneal(atoms, bonds, angles, dihedrals, starting_params, name=''):
 	for i,line in enumerate(tail.splitlines()):
 		atoms[i].x, atoms[i].y, atoms[i].z = [float(s) for s in line.split()[1:]]
 	return atoms
-	
+
+def minimize(atoms, bonds, angles, dihedrals, starting_params, name='', restrained=None, restraint_value=None):
+	run_name = utils.unique_filename('lammps/', 'minimize_'+name, '.data')
+	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
+	run_minimize(run_name, restrained=restrained, restraint_value=restraint_value)
+	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
+	if 'No such file or directory' in tail:
+		raise Exception('Minimize '+run_name+' failed')
+	return [[float(xyz) for xyz in line.split()[1:]] for line in tail.splitlines()]
+
 def energy(coords, atoms, bonds, angles, dihedrals, params):
 	box_size = (100,100,100)
 	os.chdir('lammps')
@@ -381,4 +416,5 @@ run 0
 	energy = float( re.search('TotEng\s+(\S+)', result).group(1) )
 	os.chdir('..')
 	return energy
+
 
