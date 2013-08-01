@@ -342,7 +342,7 @@ def anneal(atoms, bonds, angles, dihedrals, starting_params, name=''):
 	return atoms
 
 def minimize(atoms, bonds, angles, dihedrals, starting_params, name='', restrained=None, restraint_value=None):
-	run_name = 'minimize'
+	run_name = utils.unique_filename('lammps/', 'minimize_'+name, '.data')
 	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
 	run_minimize(run_name, restrained=restrained, restraint_value=restraint_value)
 	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]

@@ -9,7 +9,7 @@ run by gaussian.py
 0,1
 '''
 	if alternate_coords:
-		xyz = '\n'.join( ["%s %f %f %f" % (a.element,)+tuple(alternate_coords[i]) for i,a in enumerate(atoms)] ) + '\n\n'
+		xyz = '\n'.join( ["%s %f %f %f" % ((a.element,)+tuple(alternate_coords[i])) for i,a in enumerate(atoms)] ) + '\n\n'
 	else:
 		xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
 
@@ -62,7 +62,7 @@ def parse_chelpg(input_file):
 
 def minimize(atoms, levels_of_theory, queue='batch', name=''): #blocks until done
 	for theory in levels_of_theory:
-		run_name = utils.unique_filename('gaussian/', 'minimize_'+name+'_'+theory.translate( string.maketrans('/(),*', '-----') ), '.log')
+		run_name = utils.unique_filename('gaussian/', 'min_'+name+'_'+theory[:8].translate( string.maketrans('/(),*', '_____') ), '.log')
 		
 		job(atoms, theory, queue, run_name, 'Opt')
 		jsub.wait(run_name)
@@ -73,7 +73,7 @@ def minimize(atoms, levels_of_theory, queue='batch', name=''): #blocks until don
 			return run_name, energy
 
 def chelpg(atoms, theory, queue='batch', chkfile_run_name=None, name=''):
-	run_name = utils.unique_filename('gaussian/', 'chelpg_'+name+'_'+theory.translate( string.maketrans('/(),*', '-----') ), '.log')
+	run_name = utils.unique_filename('gaussian/', 'chelpg_'+name+'_'+theory[:8].translate( string.maketrans('/(),*', '_____') ), '.log')
 	if chkfile_run_name:
 		shutil.copyfile('gaussian/'+chkfile_run_name+'.chk', 'gaussian/'+run_name+'.chk')
 	job(atoms, theory, queue, run_name, 'Pop=CHelpG')
