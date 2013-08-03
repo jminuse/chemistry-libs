@@ -84,7 +84,7 @@ def chelpg(atoms, theory, queue='batch', chkfile_run_name=None, name=''):
 			atoms[i].charge = charge
 		return charges
 
-def energy(atoms, bond, theory, queue, chkfile, async=False, name='', alternate_coords=None):
+def energy(atoms, theory, queue, chkfile, async=False, name='', alternate_coords=None):
 	run_name = utils.unique_filename('gaussian/', 'energy_'+name, '.inp')
 	#if chkfile:
 	#	shutil.copyfile('gaussian/'+chkfile+'.chk', 'gaussian/'+run_name+'.chk')

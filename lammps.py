@@ -322,6 +322,7 @@ read_data	'''+run_name+'''.data
 '''+('fix holdit all restrain '+( {2:'bond',3:'angle',4:'dihedral'}[len(restrained.atoms)] )+' '+' '.join([str(a.index) for a in restrained.atoms])+' 2000.0 2000.0 '+str(restraint_value) if restrained else '')+'''
 thermo_style custom pe
 dump	1 all xyz 1000 '''+run_name+'''.xyz
+fix_modify holdit energy yes
 minimize 0.0 1.0e-8 1000 100000\n\n''')
 	f.close()
 	if os.system("lammps < "+run_name+".in") != 0:
@@ -329,9 +330,9 @@ minimize 0.0 1.0e-8 1000 100000\n\n''')
 	os.chdir('..')
 	
 
-def anneal(atoms, bonds, angles, dihedrals, starting_params, name=''):
+def anneal(atoms, bonds, angles, dihedrals, params, name=''):
 	run_name = utils.unique_filename('lammps/', 'anneal_'+name, '.data')
-	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
+	write_data_file(atoms, bonds, angles, dihedrals, params, run_name)
 	run_anneal(run_name)
 	jsub.wait(run_name)
 	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
@@ -341,14 +342,19 @@ def anneal(atoms, bonds, angles, dihedrals, starting_params, name=''):
 		atoms[i].x, atoms[i].y, atoms[i].z = [float(s) for s in line.split()[1:]]
 	return atoms
 
-def minimize(atoms, bonds, angles, dihedrals, starting_params, name='', restrained=None, restraint_value=None):
+def minimize(atoms, bonds, angles, dihedrals, params, name='', restrained=None, restraint_value=None):
 	run_name = utils.unique_filename('lammps/', 'minimize_'+name, '.data')
-	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
+	write_data_file(atoms, bonds, angles, dihedrals, params, run_name)
 	run_minimize(run_name, restrained=restrained, restraint_value=restraint_value)
 	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
 	if not tail:
 		raise Exception('Minimize failed')
 	return [[float(xyz) for xyz in line.split()[1:]] for line in tail.splitlines()]
+
+def dynamics(atoms, bonds, angles, dihedrals, params, name=''):
+	run_name = utils.unique_filename('lammps/', 'dynamics_'+name, '.data')
+	#write_data_file(atoms, bonds, angles, dihedrals, params, run_name)
+	#run_minimize(run_name, restrained=restrained, restraint_value=restraint_value)
 
 def energy(coords, atoms, bonds, angles, dihedrals, params):
 	box_size = (100,100,100)
