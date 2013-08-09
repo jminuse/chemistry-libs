@@ -1,26 +1,11 @@
 import math, random, sys
 import utils
 
-def dist_squared(a,b):
-	return (a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2
-
-def dihedral_angle(a,b,c,d):
-	dd = dist_squared
-	dd12, dd23, dd34, dd24, dd13, dd14 = dd(a,b), dd(b,c), dd(c,d), dd(b,d), dd(a,c), dd(a,d)
-
-	dd12, dd23, dd34, dd24, dd13, dd14 = [i+(random.random()+0.5)*1e-6 for i in (dd12, dd23, dd34, dd24, dd13, dd14)]
-
-	P = dd12*(dd23+dd34-dd24) + dd23*(-dd23+dd34+dd24) + dd13*(dd23-dd34+dd24) - 2*dd23*dd14
-	d12,d23,d34,d24,d13 = [math.sqrt(i) for i in dd12,dd23,dd34,dd24,dd13]
-	Q = (d12 + d23 + d13) * ( d12 + d23 - d13) * (d12 - d23 + d13) * (-d12 + d23 + d13 ) * (d23 + d34 + d24) * ( d23 + d34 - d24 ) * (d23 - d34 + d24) * (-d23 + d34 + d24 )
-	
-	return 180/math.pi*math.acos(P/math.sqrt(Q))
-
 def get_bonds(atoms):
 	bonds = []
 	for i,a in enumerate(atoms):
 		for b in atoms[i+1:]:
-			d = dist_squared(a,b)**0.5
+			d = utils.dist_squared(a,b)**0.5
 			if (a.element!=1 and b.element!=1 and d<2.) or d < 1.2:
 				bonds.append( utils.Struct(atoms=(a,b), d=d, e=None) ) #offset from current, distance
 				a.bonds.append(b)
@@ -51,7 +36,7 @@ def get_angles_and_dihedrals(atoms, bonds):
 			dihedral = angle.atoms + (b,)
 			if reversed(dihedral) not in dihedral_set:
 				dihedral_set[dihedral] = True
-	dihedrals = [utils.Struct( atoms=d, theta=dihedral_angle(d[0],d[1],d[2],d[3]), e=None ) for d in dihedral_set.keys()]
+	dihedrals = [utils.Struct( atoms=d, theta=None, e=None ) for d in dihedral_set.keys()]
 	
 	return angles, dihedrals
 
@@ -67,7 +52,7 @@ def parse_tinker_arc(molecule_file):
 		for b in a.bonded:
 			if (b,a) not in bond_set:
 				bond_set[(a,b)] = True
-	bonds = [utils.Struct(atoms=b, d=dist_squared(b[0],b[1])**0.5, e=None) for b in bond_set.keys()]
+	bonds = [utils.Struct(atoms=b, d=utils.dist_squared(b[0],b[1])**0.5, e=None) for b in bond_set.keys()]
 	angles, dihedrals = get_angles_and_dihedrals(atoms, bonds)
 	return atoms, bonds, angles, dihedrals
 
@@ -97,4 +82,11 @@ def compare_structures(molecule_files):
 		error = (dihedrals[0][i][4]-dihedrals[1][i][4])
 		if abs(error)>5:
 			print ("%6d"*4 + "%10.3f"*3) % (dihedrals[0][i][:4]+(dihedrals[0][i][4], dihedrals[1][i][4], error))
+
+def write_xyz(name, atoms):
+	f = open(name+'.xyz', 'w')
+	f.write(str(len(atoms))+'\nAtoms\n')
+	for a in atoms:
+		f.write('%s %f %f %f\n' % (a.element, a.x, a.y, a.z) )
+	f.close()
 

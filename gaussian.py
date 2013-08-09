@@ -60,11 +60,17 @@ def parse_chelpg(input_file):
 			charges.append( float(columns[2]) )
 	return charges
 
-def minimize(atoms, levels_of_theory, queue='batch', name=''): #blocks until done
-	for theory in levels_of_theory:
-		run_name = utils.unique_filename('gaussian/', 'min_'+name+'_'+theory[:8].translate( string.maketrans('/(),*', '_____') ), '.log')
-		
+def minimize(atoms, theory, queue='batch', name='', restrained=None, async=False): #blocks until done
+	run_name = utils.unique_filename('gaussian/', 'min_'+name+'_'+theory[:8].translate( string.maketrans('/(),*', '_____') ), '.inp')
+	
+	if not restrained:
 		job(atoms, theory, queue, run_name, 'Opt')
+	else:
+		dihedral = restrained
+		job(atoms, theory, queue, run_name, 'Opt=(ModRedundant,Loose)', extra_section='D %d %d %d %d F'%tuple([a.index for a in dihedral.atoms]))
+	if async:
+		return run_name
+	else:
 		jsub.wait(run_name)
 		energy, coords = parse_coords('gaussian/'+run_name+'.log')
 		if coords:
@@ -84,11 +90,11 @@ def chelpg(atoms, theory, queue='batch', chkfile_run_name=None, name=''):
 			atoms[i].charge = charge
 		return charges
 
-def energy(atoms, theory, queue, chkfile, async=False, name='', alternate_coords=None):
+def energy(atoms, theory, queue, chkfile=None, async=False, name='', alternate_coords=None):
 	run_name = utils.unique_filename('gaussian/', 'energy_'+name, '.inp')
-	#if chkfile:
-	#	shutil.copyfile('gaussian/'+chkfile+'.chk', 'gaussian/'+run_name+'.chk')
-	job(atoms, theory, queue, run_name, 'SP', procs=1, alternate_coords=alternate_coords)
+	if chkfile:
+		shutil.copyfile('gaussian/'+chkfile+'.chk', 'gaussian/'+run_name+'.chk')
+	job(atoms, theory, queue, run_name, 'SP Guess=Read', procs=1, alternate_coords=alternate_coords)
 	if async:
 		return run_name
 	else:

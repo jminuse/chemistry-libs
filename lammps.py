@@ -221,6 +221,52 @@ Pair Coeffs
 	os.chdir('..')
 
 
+def write_data_file2(atoms, bonds, angles, dihedrals, run_name):
+	box_size = (100,100,100)
+	
+	os.chdir('lammps')
+	f = open(run_name+'.data', 'w')
+	f.write('''LAMMPS Description
+
+'''+str(len(atoms))+'''  atoms
+'''+str(len(bonds))+'''  bonds
+'''+str(len(angles))+'''  angles
+'''+str(len(dihedrals))+'''  dihedrals
+0  impropers
+
+'''+str(len(atoms))+'''  atom types
+'''+str(len(bonds))+'''  bond types
+'''+str(len(angles))+'''  angle types
+'''+str(len(dihedrals))+'''  dihedral types
+0  improper types
+
+ -'''+str(box_size[0]/2)+''' '''+str(box_size[0]/2)+''' xlo xhi
+ -'''+str(box_size[1]/2)+''' '''+str(box_size[1]/2)+''' ylo yhi
+ -'''+str(box_size[2]/2)+''' '''+str(box_size[2]/2)+''' zlo zhi
+
+Masses			
+
+'''+('\n'.join(["%d\t%f" % (atom.index, atom.type.mass) for atom in atoms]))+'''
+
+Pair Coeffs
+
+'''+('\n'.join(["%d\t%f\t%f" % (atom.index, atom.type.vdw_e, atom.type.vdw_r) for atom in atoms])) )
+
+	if bonds: f.write("\n\nBond Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, bond.e, bond.d) for i,bond in enumerate(bonds)]))
+	if angles: f.write("\n\nAngle Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, angle.e, angle.theta) for i,angle in enumerate(angles)]))
+	if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d\t%f\t%f\t%f\t%f" % ((i+1,)+tuple(dihedral.e)) for i,dihedral in enumerate(dihedrals) ]))
+
+	f.write("\n\nAtoms\n\n"+'\n'.join( ['\t'.join( [str(q) for q in (a.index, 1, a.index, a.charge, a.x, a.y, a.z)] ) for i,a in enumerate(atoms) ]) ) #atom (molecule type charge x y z)
+
+	if bonds: f.write('\n\nBonds\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1, b.atoms[0].index, b.atoms[1].index]]) for i,b in enumerate(bonds)]) ) #bond (type a b)
+	if angles: f.write('\n\nAngles\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in a.atoms] ]) for i,a in enumerate(angles)]) ) #ID type atom1 atom2 atom3
+	if dihedrals: f.write('\n\nDihedrals\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in d.atoms] ]) for i,d in enumerate(dihedrals)]) ) #ID type a b c d
+	f.write('\n\n')
+	f.close()
+	os.chdir('..')
+
+
+
 def run_anneal(run_name, run_on='none'):
 	steps = 1000
 	T = 94
@@ -349,6 +395,115 @@ def minimize(atoms, bonds, angles, dihedrals, params, name='', restrained=None, 
 	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
 	if not tail:
 		raise Exception('Minimize failed')
+	return [[float(xyz) for xyz in line.split()[1:]] for line in tail.splitlines()]
+	
+def minimize2(atoms, bonds, angles, dihedrals, name='', restrained=None, restraint_value=None):
+	run_name = utils.unique_filename('lammps/', 'minimize2_'+name, '.data')
+	write_data_file2(atoms, bonds, angles, dihedrals, run_name)
+	run_minimize(run_name, restrained=restrained, restraint_value=restraint_value)
+	tail = subprocess.Popen('tail lammps/'+run_name+'.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
+	if not tail:
+		raise Exception('Minimize failed')
+	return [[float(xyz) for xyz in line.split()[1:]] for line in tail.splitlines()]
+
+def get_dihedral_values(atoms, bonds, angles, dihedrals, params):
+	run_name = 'dihedral_values'
+	write_data_file2(atoms, bonds, angles, dihedrals, run_name)
+	os.chdir('lammps')
+	f = open(run_name+'.in', 'w')
+	f.write('''units	real
+atom_style	full #bonds, angles, dihedrals, impropers, charges
+pair_style lj/cut/coul/cut 8.0 10.0
+bond_style harmonic
+angle_style harmonic
+dihedral_style opls
+read_data '''+run_name+'''.data
+compute 1 all dihedral/local phi
+compute 2 all property/local dtype
+dump d1 all local 1000 '''+run_name+'''.dat c_1 c_2
+run 0
+''')
+	f.close()
+	if subprocess.call('lammps < '+run_name+'.in', shell=True) != 0:
+		raise Exception('Getting dihedral values failed')
+	
+	pairs = [ (int(line.split()[1]), float(line.split()[0])) for line in open(run_name+'.dat').readlines()[-len(dihedrals):] ]
+	os.chdir('..')
+	#print pairs
+	return [pair[1] for pair in sorted(pairs)]
+
+def set_internal_coordinates(atoms, bonds, angles, dihedrals, strong_dihedral=None):
+	box_size = (100,100,100)
+	os.chdir('lammps')
+	f = open('internal_coords.data', 'w')
+	f.write('''LAMMPS Description
+
+'''+str(len(atoms))+'''  atoms
+'''+str(len(bonds))+'''  bonds
+'''+str(len(angles))+'''  angles
+'''+str(len(dihedrals)*0)+'''	dihedrals
+0  impropers
+
+'''+str(len(atoms))+'''  atom types
+'''+str(len(bonds))+'''  bond types
+'''+str(len(angles))+'''  angle types
+'''+str(len(dihedrals)*0)+'''  dihedral types
+0  improper types
+
+ -'''+str(box_size[0]/2)+''' '''+str(box_size[0]/2)+''' xlo xhi
+ -'''+str(box_size[1]/2)+''' '''+str(box_size[1]/2)+''' ylo yhi
+ -'''+str(box_size[2]/2)+''' '''+str(box_size[2]/2)+''' zlo zhi
+
+Masses			
+
+'''+('\n'.join(["%d\t%f" % (atom.index, atom.type.mass) for atom in atoms]))+'''
+
+Pair Coeffs
+
+'''+('\n'.join(["%d\t%f\t%f" % (atom.index, atom.type.vdw_e, atom.type.vdw_r) for atom in atoms])) )
+
+	if bonds: f.write("\n\nBond Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, max(10, bond.e), bond.d) for i,bond in enumerate(bonds)]))
+	if angles: f.write("\n\nAngle Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, max(10, angle.e), angle.theta) for i,angle in enumerate(angles)]))
+	#if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d 10 1 %d 0.5" % (i+1, dihedral.theta+180) for i,dihedral in enumerate(dihedrals) ])) #energy 1 angle(degrees) weighting
+
+
+	f.write("\n\nAtoms\n\n"+'\n'.join( ['\t'.join( [str(q) for q in (a.index, 1, a.index, a.charge, a.x, a.y, a.z)] ) for i,a in enumerate(atoms) ]) ) #atom (molecule type charge x y z)
+
+	if bonds: f.write('\n\nBonds\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1, b.atoms[0].index, b.atoms[1].index]]) for i,b in enumerate(bonds)]) ) #bond (type a b)
+	if angles: f.write('\n\nAngles\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in a.atoms] ]) for i,a in enumerate(angles)]) ) #ID type atom1 atom2 atom3
+	#if dihedrals: f.write('\n\nDihedrals\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in d.atoms] ]) for i,d in enumerate(dihedrals)]) ) #ID type a b c d
+	f.write('\n\n')
+	f.close()
+
+	#'''+ '\n'.join(['fix dih'+str(i)+' all restrain dihedral '+' '.join([str(a.index) for a in d.atoms])+(' 0.0 0.0 ' if d!=strong_dihedral else ' 0.0 0.0 ')+str(d.theta+180)+'\nfix_modify dih'+str(i)+' energy yes' for i,d in enumerate(dihedrals)]) +'''
+
+	f = open('internal_coords.in', 'w')
+	f.write('''units	real
+atom_style	full #bonds, angles, dihedrals, impropers, charges
+pair_style lj/cut/coul/cut 10.0 8.0 #0.01 0.01
+#pair_style lj/charmm/coul/charmm 8.0 10.0
+bond_style harmonic
+angle_style harmonic
+#dihedral_style charmm
+special_bonds lj/coul 0.0 0.0 0.5
+read_data internal_coords.data
+
+thermo_style custom epair emol etotal
+dump 1 all xyz 1 internal_coords.xyz
+#minimize 0.0 1.0e-8 1000 100000
+#velocity all create 600.0 1337 mom yes rot yes dist gaussian
+#fix NVE all nve/limit 1.0
+#fix TFIX all langevin 600.0 0.0 100 1337
+#run 10000
+#fix TFIX all langevin 0.0 0.0 100 24601
+#run 10000
+minimize 0.0 1.0e-8 1000 100000
+''')
+	f.close()
+	if subprocess.call('lammps < internal_coords.in', shell=True) != 0:
+		raise Exception('Setting internal coordinates failed')
+	tail = subprocess.Popen('tail internal_coords.xyz -n '+str(len(atoms)), shell=True, stdout=subprocess.PIPE).communicate()[0]
+	os.chdir('..')
 	return [[float(xyz) for xyz in line.split()[1:]] for line in tail.splitlines()]
 
 def dynamics(atoms, bonds, angles, dihedrals, params, name=''):
