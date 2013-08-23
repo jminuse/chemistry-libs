@@ -578,3 +578,105 @@ run 0
 	return energy
 
 
+
+def evaluate(mol_atoms, mol_bonds, mol_angles, mol_dihedrals, N=1):
+	run_name = utils.unique_filename('lammps/', 'eval', '.data')
+	
+	import copy
+	atoms = []
+	bonds = []
+	angles = []
+	dihedrals = []
+	for mol in range(N):
+		for a in mol_atoms:
+			aa = copy.copy(a)
+			aa.y += mol*10.
+			aa.index += mol*len(mol_atoms)
+			atoms.append(aa)
+		for b in mol_bonds:
+			bb = copy.copy(b)
+			bb.atoms = [atoms[ x.index-1+mol*len(mol_atoms) ] for x in b.atoms]
+			bonds.append(bb)
+		for b in mol_angles:
+			bb = copy.copy(b)
+			bb.atoms = [atoms[ x.index-1+mol*len(mol_atoms) ] for x in b.atoms]
+			angles.append(bb)
+		for b in mol_dihedrals:
+			bb = copy.copy(b)
+			bb.atoms = [atoms[ x.index-1+mol*len(mol_atoms) ] for x in b.atoms]
+			dihedrals.append(bb)
+	
+	box_size = (max(atoms, key=lambda a: a.x).x*2+100, max(atoms, key=lambda a: a.y).y*2+100, max(atoms, key=lambda a: a.z).z*2+100)
+	os.chdir('lammps')
+	f = open(run_name+'.data', 'w')
+	f.write('''LAMMPS Description
+
+'''+str(len(atoms))+'''  atoms
+'''+str(len(bonds))+'''  bonds
+'''+str(len(angles))+'''  angles
+'''+str(len(dihedrals))+'''  dihedrals
+0  impropers
+
+'''+str(len(atoms))+'''  atom types
+'''+str(len(bonds))+'''  bond types
+'''+str(len(angles))+'''  angle types
+'''+str(len(dihedrals))+'''  dihedral types
+0  improper types
+
+ -'''+str(box_size[0]/2)+''' '''+str(box_size[0]/2)+''' xlo xhi
+ -'''+str(box_size[1]/2)+''' '''+str(box_size[1]/2)+''' ylo yhi
+ -'''+str(box_size[2]/2)+''' '''+str(box_size[2]/2)+''' zlo zhi
+
+Masses			
+
+'''+('\n'.join(["%d\t%f" % (atom.index, atom.type.mass) for atom in atoms]))+'''
+
+Pair Coeffs
+
+'''+('\n'.join(["%d\t%f\t%f" % (atom.index, atom.type.vdw_e, atom.type.vdw_r) for atom in atoms])) )
+
+	if bonds: f.write("\n\nBond Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, bond.e, bond.d) for i,bond in enumerate(bonds)]))
+	if angles: f.write("\n\nAngle Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, angle.e, angle.theta) for i,angle in enumerate(angles)]))
+	if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d\t%f\t%f\t%f\t%f" % ((i+1,)+tuple(dihedral.e)) for i,dihedral in enumerate(dihedrals) ]))
+
+	f.write("\n\nAtoms\n\n"+'\n'.join( ['\t'.join( [str(q) for q in (a.index, 1, a.index, a.charge, a.x, a.y, a.z)] ) for i,a in enumerate(atoms) ]) ) #atom (molecule type charge x y z)
+
+	if bonds: f.write('\n\nBonds\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1, b.atoms[0].index, b.atoms[1].index]]) for i,b in enumerate(bonds)]) ) #bond (type a b)
+	if angles: f.write('\n\nAngles\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in a.atoms] ]) for i,a in enumerate(angles)]) ) #ID type atom1 atom2 atom3
+	if dihedrals: f.write('\n\nDihedrals\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in d.atoms] ]) for i,d in enumerate(dihedrals)]) ) #ID type a b c d
+	f.write('\n\n')
+	f.close()
+
+	f = open(run_name+'.in', 'w')
+	f.write('''units	real
+atom_style	full #bonds, angles, dihedrals, impropers, charges
+
+#pair_style	lj/cut/coul/long 10.0 8.0
+pair_style lj/cut/coul/cut 10.0 8.0
+bond_style harmonic
+angle_style harmonic
+dihedral_style opls
+#kspace_style pppm 1.0e-6
+special_bonds lj/coul 0.0 0.0 0.5
+
+read_data	'''+run_name+'''.data
+
+thermo_style custom temp press vol pe etotal tpcpu
+thermo		300
+dump	1 all xyz 100 '''+run_name+'''.xyz
+
+minimize 0.0 1.0e-8 1000 100000
+
+velocity all create 5000 1 rot yes dist gaussian
+timestep 1.0
+fix anneal all nvt temp 5000 1 10
+print "anneal"
+run 30000
+unfix anneal
+
+minimize 0.0 1.0e-8 1000 100000
+''')
+	f.close()
+	os.system('lammps < '+run_name+'.in')
+	os.chdir('..')
+
