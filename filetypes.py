@@ -22,7 +22,7 @@ def get_angles_and_dihedrals(atoms, bonds):
 				N = math.sqrt((a.z-b.z)**2+(a.x-b.x)**2+(a.y-b.y)**2)
 				B = math.sqrt((center.z-a.z)**2+(center.x-a.x)**2+(center.y-a.y)**2)
 				theta = 180/math.pi*math.acos((A**2+B**2-N**2)/(2*A*B))
-				angles.append( utils.Struct( atoms=(a,center,b), theta=theta, e=None) )
+				angles.append( utils.Struct( atoms=(a,center,b), theta=theta, e=None, type=None) )
 	dihedral_set = {}
 	for angle in angles:
 		for a in angle.atoms[0].bonded:
@@ -36,7 +36,7 @@ def get_angles_and_dihedrals(atoms, bonds):
 			dihedral = angle.atoms + (b,)
 			if reversed(dihedral) not in dihedral_set:
 				dihedral_set[dihedral] = True
-	dihedrals = [utils.Struct( atoms=d, theta=None, e=None ) for d in dihedral_set.keys()]
+	dihedrals = [utils.Struct( atoms=d, theta=None, e=None, type=None) for d in dihedral_set.keys()]
 	
 	return angles, dihedrals
 
@@ -52,7 +52,7 @@ def parse_tinker_arc(molecule_file):
 		for b in a.bonded:
 			if (b,a) not in bond_set:
 				bond_set[(a,b)] = True
-	bonds = [utils.Struct(atoms=b, d=utils.dist_squared(b[0],b[1])**0.5, e=None) for b in bond_set.keys()]
+	bonds = [utils.Struct(atoms=b, d=utils.dist_squared(b[0],b[1])**0.5, e=None, type=None) for b in bond_set.keys()]
 	angles, dihedrals = get_angles_and_dihedrals(atoms, bonds)
 	return atoms, bonds, angles, dihedrals
 

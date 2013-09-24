@@ -84,7 +84,11 @@ def chelpg(atoms, theory, queue='batch', chkfile_run_name=None, name=''):
 		shutil.copyfile('gaussian/'+chkfile_run_name+'.chk', 'gaussian/'+run_name+'.chk')
 	job(atoms, theory, queue, run_name, 'Pop=CHelpG')
 	jsub.wait(run_name)
-	charges = parse_chelpg('gaussian/'+run_name+'.log')
+	try:
+		charges = parse_chelpg('gaussian/'+run_name+'.log')
+	except: #sometimes file is not written yet
+		time.sleep(10)
+		charges = parse_chelpg('gaussian/'+run_name+'.log')
 	if charges:
 		for i,charge in enumerate(charges):
 			atoms[i].charge = charge
