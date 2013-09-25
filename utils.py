@@ -76,8 +76,8 @@ def angle_size(a,center,b):
 dihedral_angle_cache = {}
 def dihedral_angle(a,b,c,d):
 	cache_key = a.x+b.x+c.x+d.x
-	if cache_key in dihedral_angle_cache:
-		return dihedral_angle_cache[cache_key]
+	#if cache_key in dihedral_angle_cache:
+	#	return dihedral_angle_cache[cache_key]
 	
 	sqrt = math.sqrt
 	cos = math.cos
@@ -413,4 +413,31 @@ run 0
 	os.chdir('..')
 	raise Exception(vdw_e + coul_e + bond_e + angle_e + dihedral_e, e)
 
+
+
+def residual_E_coeffs(coords, atoms, bonds, angles, dihedrals):
+	for i,a in enumerate(atoms):
+		a.x, a.y, a.z = coords[i]
 	
+	bonded = [[] for a in atoms]
+	for b in bonds:
+		bonded[b.atoms[0].index-1].append( b.atoms[1] )
+		bonded[b.atoms[1].index-1].append( b.atoms[0] )
+	angled = [[] for a in atoms]
+	for a in angles:
+		angled[a.atoms[0].index-1].append( a.atoms[2] )
+		angled[a.atoms[2].index-1].append( a.atoms[0] )
+	dihedraled = [[] for a in atoms]
+	for d in dihedrals:
+		dihedraled[d.atoms[0].index-1].append( d.atoms[3] )
+		dihedraled[d.atoms[3].index-1].append( d.atoms[0] )
+	
+	K = 332.063708371
+	
+	residual_E_coeffs = []
+	for i,d in enumerate(dihedrals):
+		psi, cos1, cos2, cos3 = dihedral_angle(*d.atoms)
+		residual_E_coeffs += [0.5*(1+cos1),  0.5*(1-cos2), 0.5*(1+cos3)]
+	
+	return residual_E_coeffs
+

@@ -242,7 +242,7 @@ def write_data_file_general(atoms, bonds, angles, dihedrals, box_size, run_name,
  -'''+str(box_size[1]/2)+''' '''+str(box_size[1]/2)+''' ylo yhi
  -'''+str(box_size[2]/2)+''' '''+str(box_size[2]/2)+''' zlo zhi
 
-Masses			
+Masses
 
 '''+('\n'.join(["%d\t%f" % (atom_type_numbers[t], t.mass) for t in atom_types]))+'\n')
 
@@ -250,10 +250,7 @@ Masses
 
 	if bonds: f.write("\n\nBond Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (bond_type_numbers[t], t.e, t.r) for t in bond_types]))
 	if angles: f.write("\n\nAngle Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (angle_type_numbers[t], t.e, t.angle) for t in angle_types]))
-	try:
-		if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d\t%f\t%f\t%f\t%f" % ((dihedral_type_numbers[t],)+t.e) for t in dihedral_types]))
-	except:
-		print t
+	if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d\t%f\t%f\t%f\t%f" % ((dihedral_type_numbers[t],)+tuple(t.e)+((0.0,) if len(t.e)==3 else ()) ) for t in dihedral_types]))
 
 	f.write("\n\nAtoms\n\n"+'\n'.join( ['\t'.join( [str(q) for q in [a.index, 1, atom_type_numbers[a.type], a.charge, a.x, a.y, a.z]] ) for a in atoms]) ) #atom (molecule type charge x y z)
 
@@ -624,75 +621,72 @@ run 0
 
 
 
-def opls_hbond_energy(coords, atoms, bonds, angles, dihedrals, params):
-	box_size = (100,100,100)
-	os.chdir('lammps')
-	f = open('energy.data', 'w')
-	f.write('''LAMMPS Description
+def opls_hbond_energy(coords, atoms, bonds, angles, dihedrals):
+	run_name = 'energy'
+	directory = 'lammps'
+	box_size = (100,)*3
+	for i,a in enumerate(atoms):
+		a.x, a.y, a.z = coords[i]
+	atom_types = dict( [(t.type,True) for t in atoms] ).keys()
+	
+	hbonded = True
+	polar_H_label = [a.type.index+1 for i,a in enumerate(atoms) if a.element=='H' and a.charge>0.3][0]
+	electron_donor_type = [a.type for i,a in enumerate(atoms) if a.element=='N' and a.charge<-0.5][0]
+	is_charged = any([a.charge!=0.0 for a in atoms])
 
-'''+str(len(atoms))+'''  atoms
-'''+str(len(bonds))+'''  bonds
-'''+str(len(angles))+'''  angles
-'''+str(len(dihedrals))+'''  dihedrals
-0  impropers
+	if not os.path.isdir(directory):
+		os.mkdir(directory)
+	os.chdir(directory)
+	
+	if hbonded:
+		write_data_file_general(atoms, bonds, angles, dihedrals, box_size, run_name, pair_coeffs_included=False)
+	else:
+		write_data_file_general(atoms, bonds, angles, dihedrals, box_size, run_name)
+	
+	f = open(run_name+'.in', 'w')
+	f.write('''units	real\natom_style	full #bonds, angles, dihedrals, impropers, charges\n''')
 
-'''+str(len(atoms))+'''  atom types
-'''+str(len(bonds))+'''  bond types
-'''+str(len(angles))+'''  angle types
-'''+str(len(dihedrals))+'''  dihedral types
-0  improper types
+	if hbonded:
+		f.write('pair_style hybrid/overlay hbond/dreiding/morse 2 9.0 11.0 90 lj/cut/coul/cut 20.0\n')
+	elif is_charged:
+		f.write('pair_style lj/cut/coul/cut 20.0\n')
+	else:
+		f.write('pair_style lj/cut 10.0\n')
+	if bonds: f.write('bond_style harmonic\n')
+	if angles: f.write('angle_style harmonic\n')
+	if dihedrals: f.write('dihedral_style opls\n')
 
- -'''+str(box_size[0]/2)+''' '''+str(box_size[0]/2)+''' xlo xhi
- -'''+str(box_size[1]/2)+''' '''+str(box_size[1]/2)+''' ylo yhi
- -'''+str(box_size[2]/2)+''' '''+str(box_size[2]/2)+''' zlo zhi
+	f.write('''special_bonds lj/coul 0.0 0.0 0.0\nread_data	'''+run_name+'''.data\n''')
 
-Masses			
+	if hbonded:
+		for ii,a in enumerate(atom_types):
+			for jj,b in enumerate(atom_types[ii:]):
+				i = ii+1; j = i+jj
+				vdw_e = (a.vdw_e * b.vdw_e)**0.5
+				vdw_r = (a.vdw_r * b.vdw_r)**0.5
+				f.write('pair_coeff %d %d lj/cut/coul/cut %f %f\n' % (i, j, vdw_e, vdw_r))
+				if a==electron_donor_type and b==electron_donor_type:
+					#http://pubs.acs.org/doi/suppl/10.1021/ja8100227 supplementary materials
+					D0 = 0.4300
+					r0 = 3.4000
+					alpha = 5/r0
+					for donor_flag in ['i','j']: #donor = electronegative atom bonded to the H
+						f.write('pair_coeff %d %d hbond/dreiding/morse %d %s %f %f %f 2\n' % (i, j, polar_H_label, donor_flag, D0, alpha, r0))
 
-'''+('\n'.join(["%d\t%f" % (atom.index, atom.type.mass) for atom in atoms]))+'''
-
-Pair Coeffs
-
-'''+('\n'.join(["%d\t%f\t%f" % (atom.index, atom.type.vdw_e, atom.type.vdw_r) for atom in atoms])) )
-
-	if bonds: f.write("\n\nBond Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, params.bond_e[i], bond.d) for i,bond in enumerate(bonds)]))
-	if angles: f.write("\n\nAngle Coeffs\n\n"+'\n'.join(["%d\t%f\t%f" % (i+1, params.angle_e[i], angle.theta) for i,angle in enumerate(angles)]))
-	if dihedrals: f.write("\n\nDihedral Coeffs\n\n"+'\n'.join(["%d\t%f\t%f\t%f\t%f" % ((i+1,)+tuple(params.dihedral_e[i])) for i,dihedral in enumerate(dihedrals) ]))
-
-	f.write("\n\nAtoms\n\n"+'\n'.join( ['\t'.join( [str(q) for q in (a.index, 1, a.index, a.charge)+tuple(coords[i])] ) for i,a in enumerate(atoms) ]) ) #atom (molecule type charge x y z)
-
-	if bonds: f.write('\n\nBonds\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1, b.atoms[0].index, b.atoms[1].index]]) for i,b in enumerate(bonds)]) ) #bond (type a b)
-	if angles: f.write('\n\nAngles\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in a.atoms] ]) for i,a in enumerate(angles)]) ) #ID type atom1 atom2 atom3
-	if dihedrals: f.write('\n\nDihedrals\n\n' + '\n'.join( ['\t'.join([str(q) for q in [i+1, i+1]+[atom.index for atom in d.atoms] ]) for i,d in enumerate(dihedrals)]) ) #ID type a b c d
-	f.write('\n\n')
-	f.close()
-
-	f = open('energy.in', 'w')
-	f.write('''units	real
-atom_style	full #bonds, angles, dihedrals, impropers, charges
-
-#pair_style	lj/cut/coul/long 10.0 8.0
-pair_style hybrid/overlay lj/cut/coul/cut 10.0 8.0 hbond/dreiding/morse 2 9.0 11.0 90
-bond_style harmonic
-angle_style harmonic
-dihedral_style opls
-#kspace_style pppm 1.0e-6
-special_bonds lj/coul 0.0 0.0 0.5
-
-read_data	energy.data
-
-pair_coeff 1 2 hbond/dreiding/morse 3 i 3.88 1.7241379 2.9 2
-
-thermo_style custom etotal
-
+	f.write('''
+compute   hb all pair hbond/dreiding/morse
+variable    C_hbond equal c_hb[1] #number hbonds
+variable    E_hbond equal c_hb[2] #hbond energy
+thermo_style 	custom etotal ke temp pe ebond eangle edihed eimp evdwl ecoul elong v_E_hbond v_C_hbond
+thermo_modify	line multi format float %14.6f
 run 0
 ''')
 	f.close()
-	result = subprocess.Popen('lammps < energy.in', shell=True, stdout=subprocess.PIPE).communicate()[0]
-	energy = float( re.search('TotEng\s+(\S+)', result).group(1) )
+	#os.system('lammps < '+run_name+'.in')
+	result = subprocess.Popen('lammps < '+run_name+'.in', shell=True, stdout=subprocess.PIPE).communicate()[0]
+	energy = float( re.search('TotEng\s+=\s+(\S+)', result).group(1) )
 	os.chdir('..')
 	return energy
-
-
 
 
 def evaluate(mol_atoms, mol_bonds, mol_angles, mol_dihedrals, N=1):
