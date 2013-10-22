@@ -356,6 +356,47 @@ def rotate_about_dihedral(atoms, dihedral, angle):
 		atom.x, atom.y, atom.z = numpy.add(v2, origin)
 
 
+def lj_energy(atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedraled=None, lj_eps=None):
+	if not bonded or not angled or not dihedraled:
+		bonded = [[] for a in atoms]
+		for b in bonds:
+			bonded[b.atoms[0].index-1].append( b.atoms[1] )
+			bonded[b.atoms[1].index-1].append( b.atoms[0] )
+		angled = [[] for a in atoms]
+		for a in angles:
+			angled[a.atoms[0].index-1].append( a.atoms[2] )
+			angled[a.atoms[2].index-1].append( a.atoms[0] )
+		dihedraled = [[] for a in atoms]
+		for d in dihedrals:
+			dihedraled[d.atoms[0].index-1].append( d.atoms[3] )
+			dihedraled[d.atoms[3].index-1].append( d.atoms[0] )
+	
+	if not lj_eps:
+		lj_eps = {}
+		for i,a in enumerate(atoms):
+			for b in atoms[i+1:]:
+				eps = math.sqrt(a.type.vdw_e*b.type.vdw_e)
+				lj_eps[(a.type,b.type)] = eps
+	
+	K = 332.063708371
+	
+	vdw_e = 0.
+	#coul_e = 0.
+	for i,a in enumerate(atoms):
+		for b in atoms[i+1:]:
+			d_sq = dist_squared(a,b)
+			if d_sq>10.0**2: continue
+			bd = a in bonded[ b.index-1 ]
+			ad = a in angled[ b.index-1 ]
+			dd = a in dihedraled[ b.index-1 ]
+			eps = lj_eps[(a.type,b.type)]
+			sigma_sq = (a.type.vdw_r*b.type.vdw_r)
+			if not bd and not ad:
+				vdw_e += (0.5 if dd else 1.0) * 4.*eps*( (sigma_sq/d_sq)**6. - (sigma_sq/d_sq)**3.)
+				#coul_e += (0.5 if dd else 1.0) * K * a.charge*b.charge / math.sqrt(d_sq)
+
+	return vdw_e
+
 def opls_energy(coords, atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedraled=None, no_dihedrals=False, dihedrals_only=False, list_components=False):
 	starting_coords = [(a.x, a.y, a.z) for a in atoms]
 	for i,a in enumerate(atoms):
