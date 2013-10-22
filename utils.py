@@ -1,4 +1,5 @@
 import os, math, numpy, copy
+import lammps, filetypes
 
 class Memoize:
 	def __init__ (self, f):
@@ -19,14 +20,135 @@ class Struct:
 		return str( dict([ (a,None) if type(self.__dict__[a]) in (list,dict) else (a,self.__dict__[a]) for a in self.__dict__]) )
 
 
+def frange(low, high, step):
+	while low < high:
+		yield low
+		low += step
+'''
+def quat_to_mat(quat):	#quat = [w i j k]
+	w2 = quat[0]*quat[0]
+	i2 = quat[1]*quat[1]
+	j2 = quat[2]*quat[2]
+	k2 = quat[3]*quat[3]
+	twoij = 2.0*quat[1]*quat[2]
+	twoik = 2.0*quat[1]*quat[3]
+	twojk = 2.0*quat[2]*quat[3]
+	twoiw = 2.0*quat[1]*quat[0]
+	twojw = 2.0*quat[2]*quat[0]
+	twokw = 2.0*quat[3]*quat[0]
+
+	return [(w2+i2-j2-k2, twoij-twokw, twojw+twoik),
+	(twoij+twokw, w2-i2+j2-k2, twojk-twoiw),
+	(twoik-twojw, twojk+twoiw, w2-i2-j2+k2)]
+'''
+'''
+def quat_to_mat(q): #quat = [w i j k]
+	q[0],q[3] = q[3],q[0]
+	return [ [1.0 - 2*q[2]*q[2] - 2*q[3]*q[3], 2*q[1]*q[2] - 2*q[3]*q[0], 2*q[1]*q[3] + 2*q[2]*q[0]],
+	[2*q[1]*q[2] + 2*q[3]*q[0], 1.0 - 2*q[1]*q[1] - 2*q[3]*q[3], 2*q[2]*q[3] - 2*q[1]*q[0]],
+	[2*q[1]*q[3] - 2*q[2]*q[0], 2*q[2]*q[3] + 2*q[1]*q[0], 1.0 - 2*q[1]*q[1] - 2*q[2]*q[2]] ]
+'''
+def quat_to_mat(q): #quat = [w i j k]
+	d,b,c,a = q
+	return [ [a**2+b**2-c**2-d**2, 2*b*c-2*a*d, 2*b*d+2*a*c],
+	[2*b*c+2*a*d, a**2-b**2+c**2-d**2, 2*c*d-2*a*b],
+	[2*b*d-2*a*c, 2*c*d-2*a*b, a**2-b**2-c**2+d**2]
+	]
+
+
+def transform_difference(P, Q): #two sets of points on a rigid body
+	import numpy
+	center1, center2 = [[(max(pp, key=lambda p:p[i])[i]+min(pp, key=lambda p:p[i])[i])/2 for i in range(3)] for pp in (P, Q)]
+	#P = [[p[i]-center1[i] for i in range(3)] for p in P]
+	#Q = [[p[i]-center2[i] for i in range(3)] for p in Q]
+	
+	for s in (P,Q):
+		s.append( numpy.add(s[0], numpy.cross(numpy.subtract(s[1],s[0]), numpy.subtract(s[2],s[0])) ) )
+	
+	PP, QQ = [numpy.transpose([ numpy.subtract(s[1],s[0]), numpy.subtract(s[2],s[0]), numpy.subtract(s[3],s[0]) ]) for s in (P,Q)]
+	
+	return lambda v: numpy.dot(numpy.dot(QQ,numpy.linalg.inv(PP)), v) + Q[0] - numpy.dot(numpy.dot(QQ,numpy.linalg.inv(PP)), P[0])
+	
+
+def matvec(m,v):
+	return (m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2], m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2], m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2])
+	
+def rand_rotation(): #http://tog.acm.org/resources/GraphicsGems/, Ed III
+	import random
+	x = (random.random(), random.random(), random.random())
+	theta = x[0] * 2*math.pi
+	phi   = x[1] * 2*math.pi
+	z = x[2] * 2
+	#Compute a vector V used for distributing points over the sphere via the reflection I - V Transpose(V).  This formulation of V will guarantee that if x[1] and x[2] are uniformly distributed, the reflected points will be uniform on the sphere.  Note that V has length sqrt(2) to eliminate the 2 in the Householder matrix.
+	r = math.sqrt(z)
+	Vx = math.sin( phi ) * r
+	Vy = math.cos( phi ) * r
+	Vz = math.sqrt( 2.0 - z )
+	#Compute the row vector S = Transpose(V) * R, where R is a simple rotation by theta about the z-axis.  No need to compute Sz since it's just Vz.
+	st = math.sin( theta )
+	ct = math.cos( theta )
+	Sx = Vx * ct - Vy * st
+	Sy = Vx * st + Vy * ct
+
+	#Construct the rotation matrix  ( V Transpose(V) - I ) R, which is equivalent to V S - R.
+
+	M = [ [0.,0.,0.], [0.,0.,0.], [0.,0.,0.] ]
+	
+	M[0][0] = Vx * Sx - ct
+	M[0][1] = Vx * Sy - st
+	M[0][2] = Vx * Vz
+
+	M[1][0] = Vy * Sx + st
+	M[1][1] = Vy * Sy - ct
+	M[1][2] = Vy * Vz
+
+	M[2][0] = Vz * Sx
+	M[2][1] = Vz * Sy
+	M[2][2] = 1.0 - z	# This equals Vz * Vz - 1.0
+	
+	return M
+
+elements_by_atomic_number = ['','H','He','Li','Be','B','C','N','O','F','Ne','Na','Mg','Al','Si','P','S','Cl','Ar','K','Ca','Sc','Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn','Ga','Ge','As','Se','Br','Kr','Rb','Sr','Y','Zr','Nb','Mo','Tc','Ru','Rh','Pd','Ag','Cd','In','Sn','Sb','Te','I','Xe','Cs','Ba','La','Ce','Pr','Nd','Pm','Sm','Eu','Gd','Tb','Dy','Ho','Er','Tm','Yb','Lu','Hf','Ta','W','Re','Os','Ir','Pt','Au','Hg','Tl','Pb','Bi','Po','At','Rn','Fr','Ra','Ac','Th','Pa','U','Np','Pu','Am','Cm','Bk','Cf','Es','Fm','Md','No','Lr','Rf','Db','Sg','Bh','Hs','Mt','Ds','Rg','Cn','Uut','Fl','Uup','Lv','Uus','Uuo']
+
 class Molecule():
-	def __init__(self, atoms, bonds=None, angles=None, dihedrals=None): #set atoms, bonds, etc, or assume 'atoms' contains all those things if only one parameter is passed in
-		if not bonds:
-			atoms, bonds, angles, dihedrals = atoms
+	elements, atom_types, bond_types, angle_types, dihedral_types = None,None,None,None,None
+	@staticmethod
+	def set_params(param_file):
+		Molecule.elements, Molecule.atom_types, Molecule.bond_types, Molecule.angle_types, Molecule.dihedral_types = lammps.parse_opls_parameters(param_file)
+	
+	def __init__(self, atoms_or_filename_or_all, bonds=None, angles=None, dihedrals=None): #set atoms, bonds, etc, or assume 'atoms' contains all those things if only one parameter is passed in
+		if type(atoms_or_filename_or_all)==type('string'):
+			filename = atoms_or_filename_or_all
+			atoms = []
+			for line in open(filename):
+				columns = line.split()
+				if len(columns)>3:
+					atoms.append( Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=[t for t in Molecule.atom_types if t.index==int(columns[5])][0], charge=None) )
+			bond_set = {}
+			for a in atoms:
+				a.bonded = [atoms[i-1] for i in a.bonded]
+				for b in a.bonded:
+					if (b,a) not in bond_set:
+						bond_set[(a,b)] = True
+			bonds = [Struct(atoms=b, d=dist_squared(b[0],b[1])**0.5, e=None, type=None) for b in bond_set.keys()]
+			angles, dihedrals = filetypes.get_angles_and_dihedrals(atoms, bonds)
+		elif not bonds:
+			atoms, bonds, angles, dihedrals = atoms_or_filename_or_all
+		else:
+			atoms = atoms_or_filename_or_all
 		self.atoms = atoms
 		self.bonds = bonds
 		self.angles = angles
 		self.dihedrals = dihedrals
+		average_position = [(max(atoms, key=lambda a:a.x).x+min(atoms, key=lambda a:a.x).x)/2, (max(atoms, key=lambda a:a.y).y+min(atoms, key=lambda a:a.y).y)/2, (max(atoms, key=lambda a:a.z).z+min(atoms, key=lambda a:a.z).z)/2]
+		for a in atoms: #center atoms
+			a.x -= average_position[0]
+			a.y -= average_position[1]
+			a.z -= average_position[2]
+		
+		if type(atoms_or_filename_or_all)==type('string'):
+			self.set_types(Molecule.bond_types, Molecule.angle_types, Molecule.dihedral_types)
+
 	def set_types(self, bond_types, angle_types, dihedral_types): #given the atom types, find all the other types using the provided lists
 		net_charge = sum([x.type.charge for x in self.atoms])
 		count_positive = len([x for x in self.atoms if x.type.charge>0.0])
@@ -35,9 +157,13 @@ class Molecule():
 			x.charge = x.type.charge-charge_adjustment if (x.type.charge>0.0)==(net_charge>0.0) else x.type.charge
 		for x in self.bonds+self.angles+self.dihedrals:
 			index2s = tuple([a.type.index2 for a in x.atoms])
-			if not [t for t in bond_types+angle_types+dihedral_types if t.index2s==index2s or t.index2s==reversed(index2s)]:
-				print index2s
-			x.type = [t for t in bond_types+angle_types+dihedral_types if t.index2s==index2s or t.index2s==reversed(index2s)][0]
+			try:
+				x.type = [t for t in bond_types+angle_types+dihedral_types if t.index2s==index2s or t.index2s==tuple(reversed(index2s))][0]
+			except:
+				print 'No params for', index2s
+				if x in self.bonds: x.type = bond_types[0]
+				if x in self.angles: x.type = angle_types[0]; x.type.e = 0.0
+				if x in self.dihedrals: x.type = dihedral_types[0]; x.type.e = [0.0]*3
 	def add_to(self, x, y, z, atoms, bonds, angles, dihedrals): #add an instance of this molecule to the provided lists at the provided position
 		atom_offset = len(atoms)
 		for a in self.atoms:
@@ -48,7 +174,12 @@ class Molecule():
 			angles.append( Struct(atoms=tuple([atoms[a.index+atom_offset-1] for a in t.atoms]), type=t.type) )
 		for t in self.dihedrals:
 			dihedrals.append( Struct(atoms=tuple([atoms[a.index+atom_offset-1] for a in t.atoms]), type=t.type) )
-
+	def rotate(self, m):
+		for a in self.atoms:
+			a.x, a.y, a.z = matvec(m, (a.x, a.y, a.z))
+	def rand_rotate(self):
+		rand_m = rand_rotation()
+		self.rotate(rand_m)
 
 def unique_filename(directory, name, filetype):
 	number = 0
@@ -150,7 +281,7 @@ def dihedral_angle(a,b,c,d):
 	
 	dihedral_angle_cache[cache_key] = phi, math.cos(phi), math.cos(2*phi), math.cos(3*phi)
 	
-	return phi, math.cos(phi), math.cos(2*phi), math.cos(3*phi)
+	return phi, math.cos(phi), math.cos(2*phi), math.cos(3*phi), math.cos(4*phi)
 	
 	'''
 	vb1x = a.x - b.x
@@ -206,7 +337,7 @@ def rotate_about_dihedral(atoms, dihedral, angle):
 	def recurse(atom):
 		if atom==starting_atom or atom==dihedral.atoms[1]: return
 		if atom not in atoms_to_rotate:
-			print atom.index
+			#print atom.index
 			atoms_to_rotate[atom] = True
 			[recurse(a) for a in atom.bonded]
 	[recurse(a) for a in starting_atom.bonded]
@@ -225,7 +356,8 @@ def rotate_about_dihedral(atoms, dihedral, angle):
 		atom.x, atom.y, atom.z = numpy.add(v2, origin)
 
 
-def opls_energy(coords, atoms, bonds, angles, dihedrals, params, bonded=None, angled=None, dihedraled=None, no_dihedrals=False, dihedrals_only=False):
+def opls_energy(coords, atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedraled=None, no_dihedrals=False, dihedrals_only=False, list_components=False):
+	starting_coords = [(a.x, a.y, a.z) for a in atoms]
 	for i,a in enumerate(atoms):
 		a.x, a.y, a.z = coords[i]
 	
@@ -245,16 +377,12 @@ def opls_energy(coords, atoms, bonds, angles, dihedrals, params, bonded=None, an
 	
 	K = 332.063708371
 	
-	#import filetypes
-	#filetypes.write_xyz('cn3', atoms)
-	
 	vdw_e = 0.
 	coul_e = 0.
 	bond_e = 0.
 	angle_e = 0.
 	if not dihedrals_only:
 		for i,a in enumerate(atoms):
-			#print a.type.vdw_e, a.type.vdw_r, a.type.element, a.type.notes
 			for b in atoms[i+1:]:
 				d_sq = dist_squared(a,b)
 				if d_sq>10.0**2: continue
@@ -264,27 +392,35 @@ def opls_energy(coords, atoms, bonds, angles, dihedrals, params, bonded=None, an
 				eps = math.sqrt(a.type.vdw_e*b.type.vdw_e)
 				sigma_sq = (a.type.vdw_r*b.type.vdw_r)
 				if not bd and not ad:
-					vdw_e += (0.0 if dd else 1.0) * 4.*eps*( (sigma_sq/d_sq)**6. - (sigma_sq/d_sq)**3.)
-					if d_sq < 8.0**2:
-						coul_e += (0.0 if dd else 1.0) * K * a.charge*b.charge / math.sqrt(d_sq)
-					#print '\t', b.type.element, (0.0 if dd else 1.0) * 4.*eps*( (sigma_sq/d_sq)**6. - (sigma_sq/d_sq)**3.)
+					vdw_e += (0.5 if dd else 1.0) * 4.*eps*( (sigma_sq/d_sq)**6. - (sigma_sq/d_sq)**3.)
+					coul_e += (0.5 if dd else 1.0) * K * a.charge*b.charge / math.sqrt(d_sq)
 
 		for i,b in enumerate(bonds):
-			bond_e += params.bond_e[i]*(b.d-dist(b.atoms[0], b.atoms[1]))**2
+			bond_e += b.type.e*(b.type.r-dist(b.atoms[0], b.atoms[1]))**2
 	
 		for i,a in enumerate(angles):
 			theta = angle_size(a.atoms[0], a.atoms[1], a.atoms[2])
-			dif = min(( (a.theta-theta)**2, (a.theta-theta+360)**2, (a.theta-theta-360)**2))
-			angle_e += params.angle_e[i]*(math.pi/180)**2 * dif
+			dif = min(( (a.type.angle-theta)**2, (a.type.angle-theta+360)**2, (a.type.angle-theta-360)**2))
+			angle_e += a.type.e*(math.pi/180)**2 * dif
 	
 	dihedral_e = 0.
 	if not no_dihedrals:
 		for i,d in enumerate(dihedrals):
-			k1,k2,k3 = params.dihedral_e[i]
-			psi, cos1, cos2, cos3 = dihedral_angle(*d.atoms)
+			try:
+				k1,k2,k3 = d.type.e
+			except:
+				k1,k2,k3,k4 = d.type.e
+			psi, cos1, cos2, cos3, cos4 = dihedral_angle(*d.atoms)
 			dihedral_e += 0.5 * ( k1*(1+cos1) + k2*(1-cos2) + k3*(1+cos3) )
 	
-	return vdw_e + coul_e + bond_e + angle_e + dihedral_e
+	for i,a in enumerate(atoms):
+		a.x, a.y, a.z = starting_coords[i]
+	
+	#print vdw_e, coul_e, bond_e, angle_e, dihedral_e
+	if list_components:
+		return vdw_e, coul_e, bond_e, angle_e, dihedral_e
+	else:
+		return vdw_e + coul_e + bond_e + angle_e + dihedral_e
 
 import subprocess,re
 def energy_compare(coords, atoms, bonds, angles, dihedrals, params):
@@ -415,7 +551,8 @@ run 0
 
 
 
-def residual_E_coeffs(coords, atoms, bonds, angles, dihedrals):
+def residual_E_coeffs(coords, atoms, bonds, angles, dihedrals, dihedral_types_list=None, coeffs_per_dihedral=3):
+	starting_coords = [(a.x, a.y, a.z) for a in atoms]
 	for i,a in enumerate(atoms):
 		a.x, a.y, a.z = coords[i]
 	
@@ -435,9 +572,34 @@ def residual_E_coeffs(coords, atoms, bonds, angles, dihedrals):
 	K = 332.063708371
 	
 	residual_E_coeffs = []
-	for i,d in enumerate(dihedrals):
-		psi, cos1, cos2, cos3 = dihedral_angle(*d.atoms)
-		residual_E_coeffs += [0.5*(1+cos1),  0.5*(1-cos2), 0.5*(1+cos3)]
 	
+	'''for i,b in enumerate(bonds):
+		residual_E_coeffs.append( (b.d-dist(b.atoms[0], b.atoms[1]))**2 )
+
+	for i,a in enumerate(angles):
+		theta = angle_size(a.atoms[0], a.atoms[1], a.atoms[2])
+		dif = min(( (a.theta-theta)**2, (a.theta-theta+360)**2, (a.theta-theta-360)**2))
+		residual_E_coeffs.append( (math.pi/180)**2 * dif )
+	'''
+	if not dihedral_types_list: #each dihedral has its own type
+		for i,d in enumerate(dihedrals):
+			psi, cos1, cos2, cos3, cos4 = dihedral_angle(*d.atoms)
+			residual_E_coeffs += [0.5*(1+cos1),  0.5*(1-cos2), 0.5*(1+cos3)] + ([] if coeffs_per_dihedral==3 else [0.5*(1-cos4)])
+	else:
+		for d_type in dihedral_types_list:
+			terms = [0.0]*coeffs_per_dihedral
+			for d in dihedrals:
+				this_type = tuple([a.type.index2 for a in d.atoms])
+				if this_type==d_type or this_type==tuple(reversed(d_type)):
+					psi, cos1, cos2, cos3, cos4 = dihedral_angle(*d.atoms)
+					terms[0] += 0.5*(1+cos1)
+					terms[1] += 0.5*(1-cos2)
+					terms[2] += 0.5*(1+cos3)
+					if coeffs_per_dihedral>3:
+						terms[3] += 0.5*(1-cos4)
+			residual_E_coeffs += terms
+			
+	for i,a in enumerate(atoms):
+		a.x, a.y, a.z = starting_coords[i]
 	return residual_E_coeffs
 

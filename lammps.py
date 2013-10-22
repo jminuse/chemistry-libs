@@ -1,4 +1,4 @@
-import re, random, numpy, math, os, subprocess
+import re, random, numpy, math, os, subprocess, copy
 import utils, jsub
 
 def parse_opls_parameters(parameter_file):
@@ -55,7 +55,7 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 	for b in bonds:
 		options = [atom_types_by_element_and_bond_count[(atomic_number[a.element],len(a.bonded))] for a in b.atoms]
 		if not get_bond_type(options):
-			raise Exception(b)
+			print 'No bond type for', b
 
 	for ii in range(1000):
 		b = random.choice(bonds)
@@ -127,8 +127,9 @@ def guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file):
 				c3 -= 1
 	print c1, c2, c3
 	
-	
-	bond_types_used = [ bond_types_by_index2[(b.atoms[0].type.index2,b.atoms[1].type.index2)] for b in bonds]
+	try:
+		bond_types_used = [ bond_types_by_index2[(b.atoms[0].type.index2,b.atoms[1].type.index2)] for b in bonds]
+	except: return None
 	for i,b in enumerate(bonds): b.e = bond_types_used[i].e
 	
 	angle_types_used = []
@@ -448,14 +449,14 @@ def minimize2(atoms, bonds, angles, dihedrals, name='', restrained=None, restrai
 		raise Exception('Minimize failed')
 	return [[float(xyz) for xyz in line.split()[1:]] for line in tail.splitlines()]
 
-def get_dihedral_values(atoms, bonds, angles, dihedrals, params):
+def get_dihedral_values(atoms, bonds, angles, dihedrals):
 	run_name = 'dihedral_values'
 	write_data_file2(atoms, bonds, angles, dihedrals, run_name)
 	os.chdir('lammps')
 	f = open(run_name+'.in', 'w')
 	f.write('''units	real
 atom_style	full #bonds, angles, dihedrals, impropers, charges
-pair_style lj/cut/coul/cut 8.0 10.0
+pair_style lj/cut/coul/cut 10.0
 bond_style harmonic
 angle_style harmonic
 dihedral_style opls
@@ -466,15 +467,16 @@ dump d1 all local 1000 '''+run_name+'''.dat c_1 c_2
 run 0
 ''')
 	f.close()
-	if subprocess.call('lammps < '+run_name+'.in', shell=True) != 0:
-		raise Exception('Getting dihedral values failed')
+	#if subprocess.call('lammps < '+run_name+'.in', shell=True) != 0:
+	#	raise Exception('Getting dihedral values failed')
+	result = subprocess.Popen('lammps < '+run_name+'.in', shell=True, stdout=subprocess.PIPE).communicate()[0]
 	
 	pairs = [ (int(line.split()[1]), float(line.split()[0])) for line in open(run_name+'.dat').readlines()[-len(dihedrals):] ]
 	os.chdir('..')
 	#print pairs
 	return [pair[1] for pair in sorted(pairs)]
 
-def set_internal_coordinates(atoms, bonds, angles, dihedrals, strong_dihedral=None):
+def set_internal_coordinates_BROKEN(atoms, bonds, angles, dihedrals, strong_dihedral=None):
 	box_size = (100,100,100)
 	os.chdir('lammps')
 	f = open('internal_coords.data', 'w')
@@ -625,11 +627,13 @@ def opls_hbond_energy(coords, atoms, bonds, angles, dihedrals):
 	run_name = 'energy'
 	directory = 'lammps'
 	box_size = (100,)*3
+	
+	starting_coords = [(a.x, a.y, a.z) for a in atoms]
 	for i,a in enumerate(atoms):
 		a.x, a.y, a.z = coords[i]
 	atom_types = dict( [(t.type,True) for t in atoms] ).keys()
 	
-	hbonded = True
+	hbonded = False
 	polar_H_label = [a.type.index+1 for i,a in enumerate(atoms) if a.element=='H' and a.charge>0.3][0]
 	electron_donor_type = [a.type for i,a in enumerate(atoms) if a.element=='N' and a.charge<-0.5][0]
 	is_charged = any([a.charge!=0.0 for a in atoms])
@@ -656,7 +660,7 @@ def opls_hbond_energy(coords, atoms, bonds, angles, dihedrals):
 	if angles: f.write('angle_style harmonic\n')
 	if dihedrals: f.write('dihedral_style opls\n')
 
-	f.write('''special_bonds lj/coul 0.0 0.0 0.0\nread_data	'''+run_name+'''.data\n''')
+	f.write('''special_bonds lj/coul 0.0 0.0 0.5\nread_data	'''+run_name+'''.data\n''')
 
 	if hbonded:
 		for ii,a in enumerate(atom_types):
@@ -672,21 +676,59 @@ def opls_hbond_energy(coords, atoms, bonds, angles, dihedrals):
 					alpha = 5/r0
 					for donor_flag in ['i','j']: #donor = electronegative atom bonded to the H
 						f.write('pair_coeff %d %d hbond/dreiding/morse %d %s %f %f %f 2\n' % (i, j, polar_H_label, donor_flag, D0, alpha, r0))
-
-	f.write('''
+		f.write('''
 compute   hb all pair hbond/dreiding/morse
 variable    C_hbond equal c_hb[1] #number hbonds
 variable    E_hbond equal c_hb[2] #hbond energy
 thermo_style 	custom etotal ke temp pe ebond eangle edihed eimp evdwl ecoul elong v_E_hbond v_C_hbond
+''')
+	f.write('''
 thermo_modify	line multi format float %14.6f
 run 0
 ''')
 	f.close()
 	#os.system('lammps < '+run_name+'.in')
+	#sys.exit(0)
 	result = subprocess.Popen('lammps < '+run_name+'.in', shell=True, stdout=subprocess.PIPE).communicate()[0]
 	energy = float( re.search('TotEng\s+=\s+(\S+)', result).group(1) )
 	os.chdir('..')
+	for i,a in enumerate(atoms):
+		a.x, a.y, a.z = starting_coords[i]
 	return energy
+
+
+def minimize_rigid(atoms, rigid_groups):
+	run_name = 'minimize_rigid'
+	directory = 'lammps'
+	box_size = (100,)*3
+	atom_types = dict( [(t.type,True) for t in atoms] ).keys()
+	os.chdir(directory)
+	write_data_file_general(atoms, [], [], [], box_size, run_name)
+	f = open(run_name+'.in', 'w')
+	f.write('''units	real\natom_style	full #bonds, angles, dihedrals, impropers, charges\n''')
+	f.write('pair_style lj/cut/coul/cut 20.0\n')
+	f.write('''special_bonds lj/coul 0.0 0.0 0.0\nread_data	'''+run_name+'''.data\n''')
+	f.write('''thermo_style 	custom etotal evdwl ecoul
+thermo_modify	line multi format float %14.6f
+thermo 10000
+dump	1 all xyz 10000 '''+run_name+'''.xyz
+timestep 0.01\n''')
+	for g in rigid_groups:
+		f.write('group g%d id %d:%d\n' % (g[0],g[0],g[1]) )
+	f.write('fix move all rigid/nvt group '+str(len(rigid_groups))+' '+(' '.join(['g'+str(g[0]) for g in rigid_groups]))+' temp 90.0 90.0 5.0\nrun 10000\n')
+	f.close()
+	#os.system('lammps < '+run_name+'.in')
+	#sys.exit(0)
+	result = subprocess.Popen('lammps < '+run_name+'.in', shell=True, stdout=subprocess.PIPE).communicate()[0]
+	total_energy = float( re.search('TotEng\s+=\s+(\S+)', result).group(1) )
+	coul_energy = float( re.search('E_coul\s+=\s+(\S+)', result).group(1) )
+	
+	for i,line in enumerate([line for line in open(run_name+'.xyz').readlines() if len(line.split())==4][-len(atoms):]):
+		columns = line.split()
+		atoms[i].x, atoms[i].y, atoms[i].z = [float(x) for x in columns[1:]]
+	os.chdir('..')
+	return total_energy, coul_energy
+
 
 
 def evaluate(mol_atoms, mol_bonds, mol_angles, mol_dihedrals, N=1):
