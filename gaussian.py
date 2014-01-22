@@ -1,16 +1,32 @@
 import os, string, sys, re, shutil
 import jsub, utils
 
-def job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None, alternate_coords=None, spin=0, multiplicity=1):
-	head = '#t '+basis+' '+job_type+'\n\nrun by gaussian.py\n\n'+str(spin)+' '+str(multiplicity)+'\n'
+def job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None, alternate_coords=None, charge_and_multiplicity='0,1'):
+	counterpoise = 'counterpoise' in job_type.lower()
+	head = '#t '+basis+' '+job_type+'\n\nrun by gaussian.py\n\n'+charge_and_multiplicity+'\n'
 	if alternate_coords:
 		xyz = '\n'.join( ["%s %f %f %f" % ((a.element,)+tuple(alternate_coords[i])) for i,a in enumerate(atoms)] ) + '\n\n'
 	else:
-		xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
+		if atoms and type(atoms[0])==type([]): #multiple lists of atoms (e.g. transistion state calculation)
+			xyz = 'run by gaussian.py\n\n0,1\n'.join([('\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atom_list] ) + '\n\n') for atom_list in atoms])
+		else: #single list of atoms
+			if not counterpoise:
+				xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
+			else:
+				xyz = '\n'.join( [( "%s(Fragment=%d) %f %f %f" % (a.element, a.fragment, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
 
 	os.chdir('gaussian')
 	with open(run_name+'.inp', 'w') as inp:
 		inp.write(head+xyz+extra_section)
+	os.system('g09sub '+run_name+' -chk -queue '+queue+((' -nproc '+str(procs)+' ') if procs else '')+' -xhost sys_eei sys_icse')
+	os.chdir('..')
+
+def restart_job(old_run_name, job_type='ChkBasis Opt=Restart', queue='batch', procs=None):
+	run_name = old_run_name+'r'
+	os.chdir('gaussian')
+	shutil.copyfile(old_run_name+'.chk', run_name+'.chk')
+	with open(run_name+'.inp', 'w') as inp:
+		inp.write('#t '+job_type+'\n\nrun by gaussian.py\n\n')
 	os.system('g09sub '+run_name+' -chk -queue '+queue+((' -nproc '+str(procs)+' ') if procs else '')+' -xhost sys_eei sys_icse')
 	os.chdir('..')
 
@@ -48,14 +64,58 @@ def parse_coords(input_file, get_modredundant=False, get_energy=True):
 		else:
 			return coords
 
-def parse_atoms(input_file, get_energy=True):
+def scan_modredundant(starting_atoms, basis, run_name_base, modredundant_section, param_starts, param_ends, n_steps):
+	ranges = [param_ends[i]-param_starts[i] for i in range(len(param_ends))]
+	increments = [r/n_steps for r in ranges]
+	params = [p for p in param_starts]
+	for step in xrange(n_steps):
+		run_name = run_name_base+str(step)
+		if step==0:
+			job(starting_atoms, basis, 'batch', run_name, 'Opt=(CalcFC,ModRedundant)', procs=1, extra_section=modredundant_section % tuple(params) )
+		else:
+			old_run_name = run_name_base+str(step-1)
+			atoms = parse_atoms('gaussian/'+old_run_name+'.log', check_convergence=False)[1]
+			shutil.copy('gaussian/'+old_run_name+'.chk', 'gaussian/'+run_name+'.chk')
+			job(atoms, basis, 'batch', run_name, 'Opt=(CalcFC,ModRedundant) Guess=Read', procs=1, extra_section=modredundant_section % tuple(params) )
+		jsub.wait(run_name)
+		for i in range(len(params)):
+			params[i] += increments[i]
+
+def parse_atoms(input_file, get_energy=True, check_convergence=True, get_time=False, counterpoise=False):
 	contents = open(input_file).read()
-	if get_energy and 'Normal termination of Gaussian 09' not in contents:
+	if check_convergence and get_energy and 'Normal termination of Gaussian 09' not in contents:
 		return None
 
-	if get_energy:
-		energy_line = contents[contents.rindex('SCF Done'):contents.index('\n', contents.rindex('SCF Done'))]
-		energy = float(re.search('SCF Done: +\S+ += +(\S+)', energy_line).group(1))
+	if 'Summary of Optimized Potential Surface Scan' in contents:
+		end_section = contents[contents.rindex('Summary of Optimized Potential Surface Scan'):]
+		energy_lines = re.findall('Eigenvalues -- ([^\\n]+)', end_section)
+		energy = [float(s) for line in energy_lines for s in re.findall('-[\d]+\.[\d]+', line)]
+		
+		minima = re.split('Stationary point found', contents)
+		atoms = []
+		for m in minima[1:]:
+			coordinates = m.index('Coordinates (Angstroms)')
+			
+			start = m.index('---\n', coordinates)+4
+			end = m.index('\n ---', start)
+			atoms.append([])
+			for line in m[start:end].splitlines():
+				columns = line.split()
+				element = columns[1]
+				x,y,z = [float(s) for s in columns[3:6]]
+				atoms[-1].append( utils.Struct(element=utils.elements_by_atomic_number[int(columns[1])], x=x, y=y, z=z) )
+		
+		if get_energy:
+			return energy, atoms
+		
+	elif get_energy:
+		if not counterpoise:
+			energy_line = contents[contents.rindex('SCF Done'):contents.index('\n', contents.rindex('SCF Done'))]
+			energy = float(re.search('SCF Done: +\S+ += +(\S+)', energy_line).group(1))
+			#print '\n'.join(re.findall('Counterpoise: corrected energy = +(\S+)', contents))
+			#print '\n'.join(re.findall('SCF Done: +\S+ += +(\S+)', contents))
+		else:
+			energy = float(re.findall('Counterpoise: corrected energy = +(\S+)', contents)[-1])
 
 	last_coordinates = contents.rindex('Coordinates (Angstroms)')
 
@@ -68,6 +128,10 @@ def parse_atoms(input_file, get_energy=True):
 		x,y,z = [float(s) for s in columns[3:6]]
 		atoms.append( utils.Struct(element=utils.elements_by_atomic_number[int(columns[1])], x=x, y=y, z=z) )
 	
+	if get_time:
+		m = re.search('Job cpu time: +(\S+) +days +(\S+) +hours +(\S+) +minutes +(\S+) +seconds', contents)
+		time = float(m.group(1))*24*60*60 + float(m.group(2))*60*60 + float(m.group(3))*60 + float(m.group(4))
+		return energy, atoms, time
 	if get_energy:
 		return energy, atoms
 	else:

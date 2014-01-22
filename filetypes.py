@@ -1,15 +1,15 @@
-import math, random, sys
-import utils
+import math, random, sys, copy, re
+import utils, lammps
 
 def get_bonds(atoms):
 	bonds = []
 	for i,a in enumerate(atoms):
 		for b in atoms[i+1:]:
 			d = utils.dist_squared(a,b)**0.5
-			if (a.element!=1 and b.element!=1 and d<2.) or d < 1.2:
+			if (a.element!=1 and b.element!=1 and d<2.) or (d < 1.2 and (a.element!=1)!=(b.element!=1) ):
 				bonds.append( utils.Struct(atoms=(a,b), d=d, e=None) ) #offset from current, distance
-				a.bonds.append(b)
-				b.bonds.append(a)
+				a.bonded.append(b)
+				b.bonded.append(a)
 	return bonds
 
 def get_angles_and_dihedrals(atoms, bonds):
@@ -42,12 +42,18 @@ def get_angles_and_dihedrals(atoms, bonds):
 	
 	return angles, dihedrals
 
-def parse_tinker_arc(molecule_file):
+def parse_tinker_arc(molecule_file, parameter_file=None):
+	if parameter_file:
+		elements, atom_types, bond_types, angle_types, dihedral_types = lammps.parse_opls_parameters(parameter_file)
+
 	atoms = []
 	for line in open(molecule_file):
 		columns = line.split()
 		if len(columns)>3:
-			atoms.append( utils.Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=None, charge=None) )
+			atoms.append( utils.Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=([t for t in atom_types if t.index==int(columns[5][-3:])][0] if parameter_file else None), charge=None) )
+			if len(columns[5])>3:
+				atom_types.append( copy.deepcopy(atoms[-1].type) )
+				atoms[-1].type.index = int(columns[5])
 	bond_set = {}
 	for a in atoms:
 		a.bonded = [atoms[i-1] for i in a.bonded]
@@ -56,6 +62,7 @@ def parse_tinker_arc(molecule_file):
 				bond_set[(a,b)] = True
 	bonds = [utils.Struct(atoms=b, d=utils.dist_squared(b[0],b[1])**0.5, e=None, type=None) for b in bond_set.keys()]
 	angles, dihedrals = get_angles_and_dihedrals(atoms, bonds)
+	
 	return atoms, bonds, angles, dihedrals
 
 def parse_sdf(molecule_file):
@@ -109,6 +116,15 @@ def write_xyz(name, atoms, f=None):
 		f.write(str(len(atoms))+'\nAtoms\n')
 		for a in atoms:
 			f.write('%s %f %f %f\n' % (a.element, a.x, a.y, a.z) )
+			
+def parse_xyz(name):
+	atoms = []
+	for line in open(name):
+		columns = line.split()
+		if len(columns)>=4:
+			x,y,z = [float(s) for s in columns[1:4]]
+			atoms.append( utils.Struct(element=columns[0], x=x,y=y,z=z) )
+	return atoms
 	
 def write_arc(name, atoms, index_offset=0):
 	f = open(name+'.arc', 'w')
@@ -120,11 +136,17 @@ def write_arc(name, atoms, index_offset=0):
 def gaussian_to_xyz(input_file, output_file):
 	f = open(output_file, 'w')
 	contents = open(input_file).read()
-	if contents.find('Normal termination of Gaussian 09') == -1:
+	if 'Normal termination of Gaussian 09' not in contents:
 		print 'Job did not finish'
+	else:
+		m = re.search('Job cpu time: +(\S+) +days +(\S+) +hours +(\S+) +minutes +(\S+) +seconds', contents)
+		time = float(m.group(1))*24*60*60 + float(m.group(2))*60*60 + float(m.group(3))*60 + float(m.group(4))
+		print m.group(0)
+		print "%.2e s" % time
 
-	a = contents[contents.rindex('SCF Done'):contents.index('\n', contents.rindex('SCF Done'))]
-	print a
+	#a = contents[contents.rindex('SCF Done'):contents.index('\n', contents.rindex('SCF Done'))]
+	#print a
+	print '\n'.join(re.findall('SCF Done: +\S+ += +(\S+)', contents))
 
 	start = 0
 	while True:

@@ -1,5 +1,5 @@
-import os, math, numpy, copy
-import lammps, filetypes
+import os, math, copy ,numpy
+import filetypes,lammps
 
 class Memoize:
 	def __init__ (self, f):
@@ -55,7 +55,7 @@ def quat_to_mat(q): #quat = [w i j k]
 	[2*b*d-2*a*c, 2*c*d-2*a*b, a**2-b**2-c**2+d**2]
 	]
 
-
+'''
 def transform_difference(P, Q): #two sets of points on a rigid body
 	import numpy
 	center1, center2 = [[(max(pp, key=lambda p:p[i])[i]+min(pp, key=lambda p:p[i])[i])/2 for i in range(3)] for pp in (P, Q)]
@@ -68,7 +68,7 @@ def transform_difference(P, Q): #two sets of points on a rigid body
 	PP, QQ = [numpy.transpose([ numpy.subtract(s[1],s[0]), numpy.subtract(s[2],s[0]), numpy.subtract(s[3],s[0]) ]) for s in (P,Q)]
 	
 	return lambda v: numpy.dot(numpy.dot(QQ,numpy.linalg.inv(PP)), v) + Q[0] - numpy.dot(numpy.dot(QQ,numpy.linalg.inv(PP)), P[0])
-	
+'''
 
 def matvec(m,v):
 	return (m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2], m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2], m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2])
@@ -123,7 +123,7 @@ class Molecule():
 			for line in open(filename):
 				columns = line.split()
 				if len(columns)>3:
-					atoms.append( Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=[t for t in Molecule.atom_types if t.index==int(columns[5])][0], charge=None) )
+					atoms.append( Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=None if not Molecule.atom_types else [t for t in Molecule.atom_types if t.index==int(columns[5])][0], charge=None) )
 			bond_set = {}
 			for a in atoms:
 				a.bonded = [atoms[i-1] for i in a.bonded]
@@ -146,7 +146,7 @@ class Molecule():
 			a.y -= average_position[1]
 			a.z -= average_position[2]
 		
-		if type(atoms_or_filename_or_all)==type('string'):
+		if type(atoms_or_filename_or_all)==type('string') and Molecule.atom_types!=None:
 			self.set_types(Molecule.bond_types, Molecule.angle_types, Molecule.dihedral_types)
 
 	def set_types(self, bond_types, angle_types, dihedral_types): #given the atom types, find all the other types using the provided lists
@@ -160,7 +160,7 @@ class Molecule():
 			try:
 				x.type = [t for t in bond_types+angle_types+dihedral_types if t.index2s==index2s or t.index2s==tuple(reversed(index2s))][0]
 			except:
-				print 'No params for', index2s
+				print 'No params for', index2s, ':', tuple([a.index for a in x.atoms]), ':', tuple([a.element for a in x.atoms])
 				if x in self.bonds: x.type = bond_types[0]
 				if x in self.angles: x.type = angle_types[0]; x.type.e = 0.0
 				if x in self.dihedrals: x.type = dihedral_types[0]; x.type.e = [0.0]*3
@@ -177,6 +177,9 @@ class Molecule():
 	def rotate(self, m):
 		for a in self.atoms:
 			a.x, a.y, a.z = matvec(m, (a.x, a.y, a.z))
+	def translate(self, v):
+		for a in self.atoms:
+			a.x+=v[0]; a.y+=v[1]; a.z += v[2]
 	def rand_rotate(self):
 		rand_m = rand_rotation()
 		self.rotate(rand_m)
@@ -330,7 +333,7 @@ def dihedral_angle(a,b,c,d):
 	return 180.0*math.atan2(s,c)/math.pi
 	'''
 
-def rotate_about_dihedral(atoms, dihedral, angle):
+def rotate_about_dihedral(atoms, dihedral, angle): #dihedral = a struct containing a quad of atoms
 	angle = -angle
 	atoms_to_rotate = {}
 	starting_atom = dihedral.atoms[2]
@@ -381,7 +384,7 @@ def lj_energy(atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedra
 	K = 332.063708371
 	
 	vdw_e = 0.
-	#coul_e = 0.
+	coul_e = 0.
 	for i,a in enumerate(atoms):
 		for b in atoms[i+1:]:
 			d_sq = dist_squared(a,b)
@@ -393,11 +396,11 @@ def lj_energy(atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedra
 			sigma_sq = (a.type.vdw_r*b.type.vdw_r)
 			if not bd and not ad:
 				vdw_e += (0.5 if dd else 1.0) * 4.*eps*( (sigma_sq/d_sq)**6. - (sigma_sq/d_sq)**3.)
-				#coul_e += (0.5 if dd else 1.0) * K * a.charge*b.charge / math.sqrt(d_sq)
+				coul_e += (0.5 if dd else 1.0) * K * a.charge*b.charge / math.sqrt(d_sq)
 
-	return vdw_e
+	return vdw_e# + coul_e
 
-def opls_energy(coords, atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedraled=None, no_dihedrals=False, dihedrals_only=False, list_components=False):
+def opls_energy(coords, atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedraled=None, no_bonds=False, no_angles=False, no_dihedrals=False, dihedrals_only=False, list_components=False):
 	starting_coords = [(a.x, a.y, a.z) for a in atoms]
 	for i,a in enumerate(atoms):
 		a.x, a.y, a.z = coords[i]
@@ -434,15 +437,16 @@ def opls_energy(coords, atoms, bonds, angles, dihedrals, bonded=None, angled=Non
 				sigma_sq = (a.type.vdw_r*b.type.vdw_r)
 				if not bd and not ad:
 					vdw_e += (0.5 if dd else 1.0) * 4.*eps*( (sigma_sq/d_sq)**6. - (sigma_sq/d_sq)**3.)
-					coul_e += (0.5 if dd else 1.0) * K * a.charge*b.charge / math.sqrt(d_sq)
-
-		for i,b in enumerate(bonds):
-			bond_e += b.type.e*(b.type.r-dist(b.atoms[0], b.atoms[1]))**2
+					coul_e += (0.5 if dd else 1.0) * K * a.type.charge*b.type.charge / math.sqrt(d_sq)
+		if not no_bonds:
+			for i,b in enumerate(bonds):
+				bond_e += b.type.e*(b.type.r-dist(b.atoms[0], b.atoms[1]))**2
 	
-		for i,a in enumerate(angles):
-			theta = angle_size(a.atoms[0], a.atoms[1], a.atoms[2])
-			dif = min(( (a.type.angle-theta)**2, (a.type.angle-theta+360)**2, (a.type.angle-theta-360)**2))
-			angle_e += a.type.e*(math.pi/180)**2 * dif
+		if not no_angles:
+			for i,a in enumerate(angles):
+				theta = angle_size(a.atoms[0], a.atoms[1], a.atoms[2])
+				dif = min(( (a.type.angle-theta)**2, (a.type.angle-theta+360)**2, (a.type.angle-theta-360)**2))
+				angle_e += a.type.e*(math.pi/180)**2 * dif
 	
 	dihedral_e = 0.
 	if not no_dihedrals:
@@ -451,6 +455,11 @@ def opls_energy(coords, atoms, bonds, angles, dihedrals, bonded=None, angled=Non
 				k1,k2,k3 = d.type.e
 			except:
 				k1,k2,k3,k4 = d.type.e
+			'''
+			for a in d.atoms:
+				if a not in atoms:
+					print '!'
+			'''
 			psi, cos1, cos2, cos3, cos4 = dihedral_angle(*d.atoms)
 			dihedral_e += 0.5 * ( k1*(1+cos1) + k2*(1-cos2) + k3*(1+cos3) )
 	
@@ -643,4 +652,31 @@ def residual_E_coeffs(coords, atoms, bonds, angles, dihedrals, dihedral_types_li
 	for i,a in enumerate(atoms):
 		a.x, a.y, a.z = starting_coords[i]
 	return residual_E_coeffs
+
+def add_lone_pairs(atoms):
+	lone_pairs = []
+	lone_pair_R = 0.7
+	lone_pair_w = 0.5
+	for a in atoms:
+		if a.element in ['N', '7', 7]:
+			N = a
+			H = None
+			C = None
+			for b in atoms:
+				if b.element in ['H', '1', 1] and dist_squared(a,b)<1.1**2:
+					H = b
+				if b.element in ['C', '6', 6] and dist_squared(a,b)<1.7**2:
+					C = b
+			if N and C and H:
+				mid = Struct( x=C.x-lone_pair_w*(C.x-H.x), y=C.y-lone_pair_w*(C.y-H.y), z=C.z-lone_pair_w*(C.z-H.z) )
+				d = dist(N,mid)
+				x = N.x + (N.x-mid.x)*lone_pair_R/d
+				y = N.y + (N.y-mid.y)*lone_pair_R/d
+				z = N.z + (N.z-mid.z)*lone_pair_R/d
+				lone_pairs.append( Struct(element=0, x=x,y=y,z=z, charge=-2) )
+				try:
+					N.charge -= 2
+				except: pass
+	return atoms + lone_pairs
+
 
