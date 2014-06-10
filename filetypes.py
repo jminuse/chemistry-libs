@@ -3,10 +3,11 @@ import utils, lammps
 
 def get_bonds(atoms):
 	bonds = []
+	for a in atoms: a.bonded = []
 	for i,a in enumerate(atoms):
 		for b in atoms[i+1:]:
 			d = utils.dist_squared(a,b)**0.5
-			if (a.element!=1 and b.element!=1 and d<2.) or (d < 1.2 and (a.element!=1)!=(b.element!=1) ):
+			if (a.element not in [1,'H'] and b.element not in [1,'H'] and d<2.) or (d < 1.2 and (a.element in [1,'H'])!=(b.element in [1,'H']) ):
 				bonds.append( utils.Struct(atoms=(a,b), d=d, e=None) ) #offset from current, distance
 				a.bonded.append(b)
 				b.bonded.append(a)
@@ -147,6 +148,10 @@ def gaussian_to_xyz(input_file, output_file):
 	#a = contents[contents.rindex('SCF Done'):contents.index('\n', contents.rindex('SCF Done'))]
 	#print a
 	print '\n'.join(re.findall('SCF Done: +\S+ += +(\S+)', contents))
+	
+	if 'Counterpoise: corrected energy =' in contents:
+		print 'Counterpoise E = ',
+		print '\n'.join(re.findall('Counterpoise: corrected energy = +(\S+)', contents))
 
 	start = 0
 	while True:

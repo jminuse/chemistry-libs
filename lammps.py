@@ -224,6 +224,8 @@ Pair Coeffs
 
 
 def write_data_file_general(atoms, bonds, angles, dihedrals, box_size, run_name, pair_coeffs_included=True, atom_types=None):
+	dihedrals = [d for d in dihedrals if any(d.type.e)]
+
 	if not atom_types:
 		atom_types = dict( [(t.type,True) for t in atoms] ).keys() #unique set of atom types
 	bond_types = dict( [(t.type,True) for t in bonds] ).keys()

@@ -2,7 +2,6 @@ import os, string, sys, re, shutil
 import jsub, utils
 
 def job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None, alternate_coords=None, charge_and_multiplicity='0,1'):
-	counterpoise = 'counterpoise' in job_type.lower()
 	head = '#t '+basis+' '+job_type+'\n\nrun by gaussian.py\n\n'+charge_and_multiplicity+'\n'
 	if alternate_coords:
 		xyz = '\n'.join( ["%s %f %f %f" % ((a.element,)+tuple(alternate_coords[i])) for i,a in enumerate(atoms)] ) + '\n\n'
@@ -10,15 +9,17 @@ def job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None, a
 		if atoms and type(atoms[0])==type([]): #multiple lists of atoms (e.g. transistion state calculation)
 			xyz = 'run by gaussian.py\n\n0,1\n'.join([('\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atom_list] ) + '\n\n') for atom_list in atoms])
 		else: #single list of atoms
-			if not counterpoise:
-				xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
-			else:
+			if 'oniom' in basis.lower():
+				xyz = '\n'.join( [( "%s 0 %f %f %f %s" % (a.element, a.x, a.y, a.z, a.layer) ) for a in atoms] ) + '\n\n'
+			elif 'counterpoise' in job_type.lower():
 				xyz = '\n'.join( [( "%s(Fragment=%d) %f %f %f" % (a.element, a.fragment, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
-
+			else:
+				xyz = '\n'.join( [( "%s %f %f %f" % (a.element, a.x, a.y, a.z) ) for a in atoms] ) + '\n\n'
 	os.chdir('gaussian')
 	with open(run_name+'.inp', 'w') as inp:
 		inp.write(head+xyz+extra_section)
-	os.system('g09sub '+run_name+' -chk -queue '+queue+((' -nproc '+str(procs)+' ') if procs else '')+' -xhost sys_eei sys_icse')
+	os.system('g09sub '+run_name+' -chk -queue '+queue+((' -nproc '+str(procs)+' ') if procs else '')+' ') #-xhost sys_eei sys_icse
+	os.system('cp ../'+sys.argv[0]+' '+run_name+'.py')
 	os.chdir('..')
 
 def restart_job(old_run_name, job_type='ChkBasis Opt=Restart', queue='batch', procs=None):
@@ -183,7 +184,7 @@ def parse_scan(input_file):
 def parse_chelpg(input_file):
 	#os.system('ls gaussian') #test
 	#print ''
-	print os.getcwd()
+	#print os.getcwd()
 	
 	with open(input_file) as inp:
 		contents = inp.read()

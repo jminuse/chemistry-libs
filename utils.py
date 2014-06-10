@@ -73,6 +73,14 @@ def transform_difference(P, Q): #two sets of points on a rigid body
 def matvec(m,v):
 	return (m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2], m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2], m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2])
 	
+def matmat(a,b):
+	product = [[0.]*3, [0.]*3, [0.]*3]
+	for y in range(3):
+		for x in range(3):
+			for k in range(3):
+				product[y][x] += a[y][k]*b[k][x]
+	return product
+	
 def rand_rotation(): #http://tog.acm.org/resources/GraphicsGems/, Ed III
 	import random
 	x = (random.random(), random.random(), random.random())
@@ -123,7 +131,7 @@ class Molecule():
 			for line in open(filename):
 				columns = line.split()
 				if len(columns)>3:
-					atoms.append( Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]], type=None if not Molecule.atom_types else [t for t in Molecule.atom_types if t.index==int(columns[5])][0], charge=None) )
+					atoms.append( Struct(index=int(columns[0]), element=columns[1], x=float(columns[2]), y=float(columns[3]), z=float(columns[4]), bonded=[int(s) for s in columns[6:]] if len(columns)>5 else [], type=None if not Molecule.atom_types else [t for t in Molecule.atom_types if t.index==int(columns[5])][0], charge=None) )
 			bond_set = {}
 			for a in atoms:
 				a.bonded = [atoms[i-1] for i in a.bonded]
@@ -141,10 +149,10 @@ class Molecule():
 		self.angles = angles
 		self.dihedrals = dihedrals
 		average_position = [(max(atoms, key=lambda a:a.x).x+min(atoms, key=lambda a:a.x).x)/2, (max(atoms, key=lambda a:a.y).y+min(atoms, key=lambda a:a.y).y)/2, (max(atoms, key=lambda a:a.z).z+min(atoms, key=lambda a:a.z).z)/2]
-		for a in atoms: #center atoms
-			a.x -= average_position[0]
-			a.y -= average_position[1]
-			a.z -= average_position[2]
+		#for a in atoms: #center atoms
+		#	a.x -= average_position[0]
+		#	a.y -= average_position[1]
+		#	a.z -= average_position[2]
 		
 		if type(atoms_or_filename_or_all)==type('string') and Molecule.atom_types!=None:
 			self.set_types(Molecule.bond_types, Molecule.angle_types, Molecule.dihedral_types)
@@ -152,6 +160,7 @@ class Molecule():
 	def set_types(self, bond_types, angle_types, dihedral_types): #given the atom types, find all the other types using the provided lists
 		net_charge = sum([x.type.charge for x in self.atoms])
 		count_positive = len([x for x in self.atoms if x.type.charge>0.0])
+		if abs(net_charge)>0.1: pass #print 'Adjusting net charge', net_charge 
 		charge_adjustment = net_charge/count_positive if net_charge>0.0 else net_charge/(len(self.atoms)-count_positive)
 		for x in self.atoms:
 			x.charge = x.type.charge-charge_adjustment if (x.type.charge>0.0)==(net_charge>0.0) else x.type.charge
@@ -160,7 +169,7 @@ class Molecule():
 			try:
 				x.type = [t for t in bond_types+angle_types+dihedral_types if t.index2s==index2s or t.index2s==tuple(reversed(index2s))][0]
 			except:
-				print 'No params for', index2s, ':', tuple([a.index for a in x.atoms]), ':', tuple([a.element for a in x.atoms])
+				#print 'No params for', index2s, ':', tuple([a.index for a in x.atoms]), ':', tuple([a.element for a in x.atoms])
 				if x in self.bonds: x.type = bond_types[0]
 				if x in self.angles: x.type = angle_types[0]; x.type.e = 0.0
 				if x in self.dihedrals: x.type = dihedral_types[0]; x.type.e = [0.0]*3
