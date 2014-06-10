@@ -1,0 +1,72 @@
+A library of Python modules for chemistry on the Cornell Chemical Engineering system. 
+
+lammps.py:
+	parse_opls_parameters(parameter_file)
+	guess_opls_parameters(atoms, bonds, angles, dihedrals, opls_parameter_file)
+	write_data_file(atoms, bonds, angles, dihedrals, starting_params, run_name)
+	write_data_file_general(atoms, bonds, angles, dihedrals, box_size, run_name, pair_coeffs_included=True, atom_types=None)
+	write_data_file2(atoms, bonds, angles, dihedrals, run_name)
+	run_anneal(run_name, run_on='none')
+	run_minimize(run_name, restrained=None, restraint_value=None)
+	anneal(atoms, bonds, angles, dihedrals, params, name='')
+	minimize(atoms, bonds, angles, dihedrals, params, name='', restrained=None, restraint_value=None)
+	minimize2(atoms, bonds, angles, dihedrals, name='', restrained=None, restraint_value=None)
+	get_dihedral_values(atoms, bonds, angles, dihedrals)
+	set_internal_coordinates_BROKEN(atoms, bonds, angles, dihedrals, strong_dihedral=None)
+	dynamics(atoms, bonds, angles, dihedrals, params, name='')
+	opls_energy(coords, atoms, bonds, angles, dihedrals, params)
+	opls_hbond_energy(coords, atoms, bonds, angles, dihedrals)
+	minimize_rigid(atoms, rigid_groups)
+	evaluate(mol_atoms, mol_bonds, mol_angles, mol_dihedrals, N=1)
+
+jsub.py:
+	wait(run_names)
+
+filetypes.py:
+	get_bonds(atoms)
+	get_angles_and_dihedrals(atoms, bonds)
+	parse_tinker_arc(molecule_file, parameter_file=None)
+	parse_sdf(molecule_file)
+	compare_structures(molecule_files)
+	write_xyz(name, atoms, f=None)
+	parse_xyz(name)
+	write_arc(name, atoms, index_offset=0)
+	gaussian_to_xyz(input_file, output_file)
+
+utils.py:
+	frange(low, high, step)
+	quat_to_mat(quat):	#quat = [w i j k
+	quat_to_mat(q): #quat = [w i j k
+	quat_to_mat(q): #quat = [w i j k
+	transform_difference(P, Q): #two sets of points on a rigid bod
+	matvec(m,v)
+	matmat(a,b)
+	rand_rotation(): #http://tog.acm.org/resources/GraphicsGems/, Ed II
+	unique_filename(directory, name, filetype)
+	dist_squared(a,b)
+	dist(a,b)
+	angle_size(a,center,b)
+	dihedral_angle(a,b,c,d)
+	rotate_about_dihedral(atoms, dihedral, angle): #dihedral = a struct containing a quad of atom
+	lj_energy(atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedraled=None, lj_eps=None)
+	opls_energy(coords, atoms, bonds, angles, dihedrals, bonded=None, angled=None, dihedraled=None, no_bonds=False, no_angles=False, no_dihedrals=False, dihedrals_only=False, list_components=False)
+	energy_compare(coords, atoms, bonds, angles, dihedrals, params)
+	residual_E_coeffs(coords, atoms, bonds, angles, dihedrals, dihedral_types_list=None, coeffs_per_dihedral=3)
+	add_lone_pairs(atoms)
+
+gaussian.py:
+	job(atoms, basis, queue, run_name, job_type, extra_section='', procs=None, alternate_coords=None, charge_and_multiplicity='0,1')
+	restart_job(old_run_name, job_type='ChkBasis Opt=Restart', queue='batch', procs=None)
+	parse_coords(input_file, get_modredundant=False, get_energy=True)
+	scan_modredundant(starting_atoms, basis, run_name_base, modredundant_section, param_starts, param_ends, n_steps)
+	parse_atoms(input_file, get_energy=True, check_convergence=True, get_time=False, counterpoise=False)
+	parse_starting_coords(input_file)
+	parse_scan(input_file)
+	parse_chelpg(input_file)
+	minimize(atoms, theory, queue='batch', name='', restrained=None, async=False): #blocks until don
+	chelpg(atoms, theory, queue='batch', chkfile_run_name=None, name='')
+	energy(atoms, theory, queue='batch', chkfile=None, async=False, name='', alternate_coords=None)
+	bond_energy(atoms, bond, theory, queue, chkfile, async=False, inc=None, name='')
+	angle_energy(atoms, angle, theory, queue, chkfile, async=False, inc=3.0, name='')
+	dihedral_energy(atoms, dihedral, theory, queue, chkfile, async=False, inc=None, name='')
+
